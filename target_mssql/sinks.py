@@ -157,15 +157,18 @@ class mssqlSink(SQLSink):
         """
         # First we need to be sure the main table is already created
         conformed_records = (
-            [self.conform_record(record) for record in context["records"]]
-            if isinstance(context["records"], list)
-            else (self.conform_record(record) for record in context["records"])
+            self.conform_record(record) for record in context["records"]
         )
 
         join_keys = [self.conform_name(key, "column") for key in self.key_properties]
         schema = self.conform_schema(self.schema)
 
         if self.key_properties:
+            deduped_records = {
+                frozenset(record[k] for k in self.key_properties): record
+                for record in conformed_records
+            }.values()
+
             self.logger.info(f"Preparing table {self.full_table_name}")
             self.connector.prepare_table(
                 full_table_name=self.full_table_name,
@@ -189,7 +192,7 @@ class mssqlSink(SQLSink):
             self.bulk_insert_records(
                 full_table_name=tmp_table_name,
                 schema=schema,
-                records=conformed_records,
+                records=deduped_records,
                 is_temp_table=True,
             )
             # Merge data from Temp table to main table
