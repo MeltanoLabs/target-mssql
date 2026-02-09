@@ -12,9 +12,9 @@ license = "Apache 2.0"
 [tool.poetry.dependencies]
 python = ">=3.9,<3.12"
 requests = "^2.25.1"
-singer-sdk = "^0.19"
+singer-sdk = "^0.48.1"
 pymssql = ">=2.2.5"
-sqlalchemy = "^1.4"
+sqlalchemy = "^2"
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.2.5"
