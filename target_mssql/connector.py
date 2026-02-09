@@ -71,7 +71,7 @@ class mssqlConnector(SQLConnector):
             port=config["port"],
             database=config["database"],
         )
-        return str(connection_url)
+        return connection_url.render_as_string(hide_password=False)
 
     def create_empty_table(
         self,
