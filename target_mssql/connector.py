@@ -386,7 +386,7 @@ class mssqlConnector(SQLConnector):
         )
 
         droptable = f"DROP TABLE IF EXISTS {tmp_full_table_name}"
-        self.connection.execute(droptable)
+        self.connection.exec_driver_sql(droptable)
 
         ddl = f"""
             SELECT TOP 0 *
@@ -394,4 +394,4 @@ class mssqlConnector(SQLConnector):
             FROM {full_table_name}
         """  # nosec
 
-        self.connection.execute(ddl)
+        self.connection.exec_driver_sql(ddl)
