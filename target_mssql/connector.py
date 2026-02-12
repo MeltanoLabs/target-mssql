@@ -131,142 +131,15 @@ class mssqlConnector(SQLConnector):
         _ = sqlalchemy.Table(table_name, meta, *columns, schema=schema_name)
         meta.create_all(self._engine)
 
-    def merge_sql_types(  # noqa
-        self, sql_types: list[sqlalchemy.types.TypeEngine]
-    ) -> sqlalchemy.types.TypeEngine:  # noqa
-        """Return a compatible SQL type for the selected type list.
-        Args:
-            sql_types: List of SQL types.
-        Returns:
-            A SQL type that is compatible with the input types.
-        Raises:
-            ValueError: If sql_types argument has zero members.
-        """
-        if not sql_types:
-            raise ValueError("Expected at least one member in `sql_types` argument.")
+    def merge_sql_types(self, sql_types):
+        current_type, target_type = sql_types
 
-        if len(sql_types) == 1:
-            return sql_types[0]
+        if isinstance(current_type, sqlalchemy.DateTime) and isinstance(
+            target_type, mssql.DATETIMEOFFSET
+        ):
+            return target_type
 
-        # Gathering Type to match variables
-        # sent in _adapt_column_type
-        current_type = sql_types[0]
-        # sql_type = sql_types[1]
-
-        # Getting the length of each type
-        # current_type_len: int = getattr(sql_types[0], "length", 0)
-        sql_type_len: int = getattr(sql_types[1], "length", 0)
-        if sql_type_len is None:
-            sql_type_len = 0
-
-        # Convert the two types given into a sorted list
-        # containing the best conversion classes
-        sql_types = self._sort_types(sql_types)
-
-        # If greater than two evaluate the first pair then on down the line
-        if len(sql_types) > 2:
-            return self.merge_sql_types(
-                [self.merge_sql_types([sql_types[0], sql_types[1]])] + sql_types[2:]
-            )
-
-        assert len(sql_types) == 2
-        # Get the generic type class
-        for opt in sql_types:
-            # Get the length
-            opt_len: int = getattr(opt, "length", 0)
-            generic_type = type(opt.as_generic())
-
-            if isinstance(generic_type, type):
-                if issubclass(
-                    generic_type,
-                    (sqlalchemy.types.String, sqlalchemy.types.Unicode),
-                ):
-                    # If length None or 0 then is varchar max ?
-                    if (
-                        (opt_len is None)
-                        or (opt_len == 0)
-                        or (opt_len >= current_type.length)
-                    ):
-                        return opt
-                elif isinstance(
-                    generic_type,
-                    (sqlalchemy.types.String, sqlalchemy.types.Unicode),
-                ):
-                    # If length None or 0 then is varchar max ?
-                    if (
-                        (opt_len is None)
-                        or (opt_len == 0)
-                        or (opt_len >= current_type.length)
-                    ):
-                        return opt
-                # If best conversion class is equal to current type
-                # return the best conversion class
-                elif str(opt) == str(current_type):
-                    return opt
-
-        raise ValueError(
-            f"Unable to merge sql types: {', '.join([str(t) for t in sql_types])}"
-        )
-
-    def _adapt_column_type(
-        self,
-        full_table_name: str,
-        column_name: str,
-        sql_type: sqlalchemy.types.TypeEngine,
-    ) -> None:
-        """Adapt table column type to support the new JSON schema type.
-        Args:
-            full_table_name: The target table name.
-            column_name: The target column name.
-            sql_type: The new SQLAlchemy type.
-        Raises:
-            NotImplementedError: if altering columns is not supported.
-        """
-        current_type: sqlalchemy.types.TypeEngine = self._get_column_type(
-            full_table_name, column_name
-        )
-
-        # Check if the existing column type and the sql type are the same
-        if str(sql_type) == str(current_type):
-            # The current column and sql type are the same
-            # Nothing to do
-            return
-
-        # Not the same type, generic type or compatible types
-        # calling merge_sql_types for assistnace
-        compatible_sql_type = self.merge_sql_types([current_type, sql_type])
-
-        if str(compatible_sql_type).split(" ")[0] == str(current_type).split(" ")[0]:
-            # Nothing to do
-            return
-
-        if not self.allow_column_alter:
-            raise NotImplementedError(
-                "Altering columns is not supported. "
-                f"Could not convert column '{full_table_name}.{column_name}' "
-                f"from '{current_type}' to '{compatible_sql_type}'."
-            )
-        try:
-            self.connection.execute(
-                f"""ALTER TABLE { str(full_table_name) }
-                ALTER COLUMN { str(column_name) } { str(compatible_sql_type) }"""
-            )
-        except Exception as e:
-            raise RuntimeError(
-                f"Could not convert column '{full_table_name}.{column_name}' "
-                f"from '{current_type}' to '{compatible_sql_type}'."
-            ) from e
-
-        # self.connection.execute(
-        #     sqlalchemy.DDL(
-        #         "ALTER TABLE %(table)s ALTER COLUMN %(col_name)s %(col_type)s",
-        #         {
-        #             "table": full_table_name,
-        #             "col_name": column_name,
-        #             "col_type": compatible_sql_type,
-        #         },
-        #     )
-        # )
+        return super().merge_sql_types(sql_types)
 
     def _create_empty_column(
         self,
@@ -399,3 +272,20 @@ class mssqlConnector(SQLConnector):
     @cached_property
     def connection(self):
         return self._engine.connect().execution_options(stream_results=True)
+
+    @staticmethod
+    def get_column_alter_ddl(table_name, column_name, column_type):
+        # SELECT statement required to work around
+        # "Statement not executed or executed statement has no resultset" error
+        # from pymssql
+        return sqlalchemy.DDL(
+            """
+            ALTER TABLE %(table_name)s ALTER COLUMN %(column_name)s %(column_type)s
+            SELECT 1 AS ok
+            """,
+            {
+                "table_name": table_name,
+                "column_name": column_name,
+                "column_type": column_type,
+            },
+        )
