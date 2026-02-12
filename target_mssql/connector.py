@@ -21,6 +21,10 @@ class mssqlConnector(SQLConnector):
     allow_merge_upsert: bool = True  # Whether MERGE UPSERT is supported.
     allow_temp_tables: bool = True  # Whether temp tables are supported.
 
+    def create_schema(self, schema_name):
+        with self._connect() as conn, conn.begin():
+            conn.exec_driver_sql(f"CREATE SCHEMA {schema_name}")
+
     def create_table_with_records(
         self,
         full_table_name: Optional[str],
