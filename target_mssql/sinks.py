@@ -257,7 +257,7 @@ class mssqlSink(SQLSink):
         """  # nosec
 
         with self.connection.begin():
-            self.connection.execute(merge_sql)
+            self.connection.exec_driver_sql(merge_sql)
 
     def parse_full_table_name(
         self, full_table_name: str
