@@ -273,8 +273,7 @@ class mssqlConnector(SQLConnector):
     def connection(self):
         return self._engine.connect().execution_options(stream_results=True)
 
-    @staticmethod
-    def get_column_alter_ddl(table_name, column_name, column_type):
+    def get_column_alter_ddl(self, table_name, column_name, column_type):
         # SELECT statement required to work around
         # "Statement not executed or executed statement has no resultset" error
         # from pymssql
@@ -285,7 +284,7 @@ class mssqlConnector(SQLConnector):
             """,
             {
                 "table_name": table_name,
-                "column_name": column_name,
+                "column_name": self._dialect.identifier_preparer.quote(column_name),
                 "column_type": column_type,
             },
         )
