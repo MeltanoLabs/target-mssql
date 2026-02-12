@@ -231,15 +231,22 @@ class mssqlSink(SQLSink):
         """
         # TODO think about sql injeciton,
         # issue here https://github.com/MeltanoLabs/target-postgres/issues/22
+        quoted_keys = {
+            key: self.connector._dialect.identifier_preparer.quote(key)
+            for key in schema["properties"]
+        }
 
         join_condition = " and ".join(
-            [f"temp.{key} = target.{key}" for key in join_keys]
+            [
+                f"temp.{quoted_keys[key]} = target.{quoted_keys[key]}"
+                for key in join_keys
+            ]
         )
 
         update_stmt = ", ".join(
             [
-                f"target.{key} = temp.{key}"
-                for key in schema["properties"].keys()
+                f"target.{quoted_key} = temp.{quoted_key}"
+                for key, quoted_key in quoted_keys.items()
                 if key not in join_keys
             ]
         )  # noqa
@@ -252,8 +259,8 @@ class mssqlSink(SQLSink):
                 UPDATE SET
                     { update_stmt }
             WHEN NOT MATCHED THEN
-                INSERT ({", ".join(schema["properties"].keys())})
-                VALUES ({", ".join([f"temp.{key}" for key in schema["properties"].keys()])});
+                INSERT ({", ".join(quoted_keys.values())})
+                VALUES ({", ".join([f"temp.{quoted_key}" for quoted_key in quoted_keys.values()])});
         """  # nosec
 
         with self.connection.begin():
