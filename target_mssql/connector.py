@@ -386,16 +386,17 @@ class mssqlConnector(SQLConnector):
             f"{schema_name}.#{table_name}" if schema_name else f"#{table_name}"
         )
 
-        droptable = f"DROP TABLE IF EXISTS {tmp_full_table_name}"
-        self.connection.exec_driver_sql(droptable)
+        with self.connection.begin():
+            droptable = f"DROP TABLE IF EXISTS {tmp_full_table_name}"
+            self.connection.exec_driver_sql(droptable)
 
-        ddl = f"""
-            SELECT TOP 0 *
-            into {tmp_full_table_name}
-            FROM {full_table_name}
-        """  # nosec
+            ddl = f"""
+                SELECT TOP 0 *
+                into {tmp_full_table_name}
+                FROM {full_table_name}
+            """  # nosec
 
-        self.connection.exec_driver_sql(ddl)
+            self.connection.exec_driver_sql(ddl)
 
     @cached_property
     def connection(self):

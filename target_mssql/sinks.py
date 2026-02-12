@@ -127,7 +127,8 @@ class mssqlSink(SQLSink):
                 insert_record[column.name] = record.get(column.name)
             insert_records.append(insert_record)
 
-        cursor: CursorResult = self.connection.execute(insert_sql, insert_records)
+        with self.connection.begin():
+            cursor: CursorResult = self.connection.execute(insert_sql, insert_records)
 
         with metrics.record_counter(full_table_name) as record_counter:
             record_counter.increment(cursor.rowcount)
