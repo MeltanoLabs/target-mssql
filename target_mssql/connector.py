@@ -141,42 +141,6 @@ class mssqlConnector(SQLConnector):
 
         return super().merge_sql_types(sql_types)
 
-    def _create_empty_column(
-        self,
-        full_table_name: str,
-        column_name: str,
-        sql_type: sqlalchemy.types.TypeEngine,
-    ) -> None:
-        """Create a new column.
-        Args:
-            full_table_name: The target table name.
-            column_name: The name of the new column.
-            sql_type: SQLAlchemy type engine to be used in creating the new column.
-        Raises:
-            NotImplementedError: if adding columns is not supported.
-        """
-        if not self.allow_column_add:
-            raise NotImplementedError("Adding columns is not supported.")
-
-        create_column_clause = sqlalchemy.schema.CreateColumn(
-            sqlalchemy.Column(
-                column_name,
-                sql_type,
-            )
-        )
-
-        try:
-            self.connection.execute(
-                f"""ALTER TABLE { str(full_table_name) }
-                ADD { str(create_column_clause) } """
-            )
-
-        except Exception as e:
-            raise RuntimeError(
-                f"Could not create column '{create_column_clause}' "
-                f"on table '{full_table_name}'."
-            ) from e
-
     def _jsonschema_type_check(
         self, jsonschema_type: dict, type_check: tuple[str]
     ) -> bool:
@@ -272,6 +236,29 @@ class mssqlConnector(SQLConnector):
     @cached_property
     def connection(self):
         return self._engine.connect().execution_options(stream_results=True)
+
+    def get_column_add_ddl(self, table_name, column_name, column_type):
+        column = sqlalchemy.Column(column_name, column_type)
+
+        table = sqlalchemy.Table(table_name, sqlalchemy.MetaData())
+        table.append_column(column)
+
+        create_column_clause = sqlalchemy.sql.ddl.CreateColumn(column)
+        compiled = create_column_clause.compile(self._engine)
+
+        # SELECT statement required to work around
+        # "Statement not executed or executed statement has no resultset" error
+        # from pymssql
+        return sqlalchemy.DDL(
+            """
+            ALTER TABLE %(table_name)s ADD %(create_column_clause)s
+            SELECT 1 AS ok
+            """,
+            {
+                "table_name": table_name,
+                "create_column_clause": compiled,
+            },
+        )
 
     def get_column_alter_ddl(self, table_name, column_name, column_type):
         # SELECT statement required to work around
