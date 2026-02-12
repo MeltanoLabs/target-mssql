@@ -339,9 +339,7 @@ class mssqlConnector(SQLConnector):
             datelike_type = get_datelike_property_type(jsonschema_type)
             if datelike_type:
                 if datelike_type == "date-time":
-                    return cast(
-                        sqlalchemy.types.TypeEngine, sqlalchemy.types.DATETIME()
-                    )
+                    return cast(sqlalchemy.types.TypeEngine, mssql.DATETIMEOFFSET())
                 if datelike_type in "time":
                     return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.TIME())
                 if datelike_type == "date":
