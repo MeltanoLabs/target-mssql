@@ -81,10 +81,11 @@ class mssqlSink(SQLSink):
         Returns:
             A new, processed record.
         """
-        keys = record.keys()
-        for key in keys:
-            if type(record[key]) in [list, dict]:
-                record[key] = json.dumps(record[key], default=str)
+        for key, value in record.items():
+            if type(value) in [list, dict]:
+                record[key] = json.dumps(value, default=str)
+            elif type(value) is str:
+                record[key] = value.replace("\x00", "")
 
         return record
 
