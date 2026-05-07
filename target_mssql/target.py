@@ -58,6 +58,24 @@ class Targetmssql(SQLTarget):
             description="Use float data type for numbers (otherwise number type is used)",
             default=False,
         ),
+        th.Property(
+            "driver",
+            th.StringType,
+            description="The driver to use for the database connection (pymssql or pyodbc)",
+            default="pymssql",
+            allowed_values=["pymssql", "pyodbc"],
+        ),
+        th.Property(
+            "odbc_driver",
+            th.StringType,
+            description="The ODBC driver to use when driver=pyodbc (e.g. 'ODBC Driver 18 for SQL Server')",
+        ),
+        th.Property(
+            "trust_server_certificate",
+            th.BooleanType,
+            description="Trust the server certificate without validation (useful for self-signed certs)",
+            default=False,
+        ),
     ).to_dict()
 
     default_sink_class = mssqlSink

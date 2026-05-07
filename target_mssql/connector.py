@@ -68,13 +68,25 @@ class mssqlConnector(SQLConnector):
         if config.get("sqlalchemy_url"):
             return config["sqlalchemy_url"]
 
+        driver = config["driver"]
+
+        query = {}
+        if driver == "pyodbc":
+            odbc_driver = config.get("odbc_driver", "ODBC Driver 17 for SQL Server")
+            query["driver"] = odbc_driver
+            if config.get("trust_server_certificate"):
+                query["TrustServerCertificate"] = "yes"
+
+        self.logger.info("Using MSSQL SQLAlchemy '%s' driver", driver)
+
         connection_url = sqlalchemy.engine.url.URL.create(
-            drivername="mssql+pymssql",
+            drivername=f"mssql+{driver}",
             username=config["username"],
             password=config["password"],
             host=config["host"],
             port=config["port"],
             database=config["database"],
+            query=query,
         )
         return connection_url.render_as_string(hide_password=False)
 
