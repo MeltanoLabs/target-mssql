@@ -1,0 +1,65 @@
+# Performance notes
+
+## How to benchmark
+
+Start MSSQL and create a config file:
+
+```bash
+docker compose up -d sink
+cat > benchmark_config.json <<'EOF'
+{"schema":"dbo","username":"sa","password":"P@55w0rd","host":"localhost","port":"1433","database":"master","table_prefix":"bench_"}
+EOF
+```
+
+Generate synthetic data and time a run:
+
+```bash
+uv run python target_mssql/tests/generate_benchmark_data.py 100000 \
+  | { time uv run target-mssql --config benchmark_config.json; } 2>&1 \
+  | grep -E "METRIC|cpu"
+```
+
+## Baseline (2026-05-11, local Docker MSSQL 2022, upsert path)
+
+| Records | Wall time | Throughput |
+|---------|-----------|------------|
+| 1,000   | 1.63s     | ~610 rec/s |
+| 10,000  | 2.77s     | ~3,610 rec/s |
+| 100,000 | 23.4s     | ~4,270 rec/s |
+
+Fixed startup + first-batch overhead is ~1.3s. At steady state each 10,000-record batch
+takes ~2s through the temp-table + MERGE path.
+
+## Batch timing breakdown (10k records, upsert path)
+
+| Step | Time | % |
+|------|------|---|
+| dedupe in memory | 0.12s | 6% |
+| `prepare_table` (DDL check) | 0.10s | 5% |
+| `create_temp_table` (DROP+SELECT INTO) | 0.02s | 1% |
+| **`bulk_insert` into `#temp`** | **1.55s** | **83%** |
+| `MERGE INTO` main table | 0.07s | 4% |
+
+## Key finding
+
+The bottleneck is **SQL Server's INSERT throughput into tempdb** (~6,000–7,000 rows/sec).
+Confirmed by trying: multi-row INSERTs (same speed), `WITH (TABLOCK)` (marginal),
+`SET NOCOUNT ON` (no effect), inline-VALUES MERGE (slower — 2.1s vs 1.7s), and measuring
+the no-primary-key path (same ~1.7s for 10k rows directly into the main table).
+The wall is SQL Server I/O in Docker, not Python or network overhead.
+
+## What was changed
+
+`bulk_insert_records` now uses explicit multi-row `INSERT … VALUES (…),(…),…` statements
+chunked to SQL Server's 2100-parameter limit, with `WITH (TABLOCK)` on temp table inserts.
+This is cleaner than SQLAlchemy `executemany` (which also returned a wrong `rowcount`)
+and enables minimal logging on the heap temp table.
+
+## Remaining levers to explore
+
+- **Larger `batch_size_rows`** — the 0.1s `prepare_table` + 0.02s temp-table DDL overhead
+  is paid once per batch; fewer bigger batches would amortize it.
+  Set via `{"batch_size_rows": 50000}` in config.
+- **Skip `prepare_table` when schema is unchanged** — saves ~0.1s per batch after the first.
+- **SQL Server bulk-copy (BCP)** — would bypass tempdb logging entirely but requires
+  file-system access not available through pymssql.

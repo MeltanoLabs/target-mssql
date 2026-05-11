@@ -7,7 +7,6 @@ import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
-import sqlalchemy
 from singer_sdk import metrics
 from singer_sdk.connectors.sql import SQLConnector
 from singer_sdk.helpers._conformers import replace_leading_digit
@@ -18,7 +17,6 @@ from target_mssql.connector import mssqlConnector
 
 if TYPE_CHECKING:
     from singer_sdk.plugin_base import PluginBase
-    from sqlalchemy.engine import CursorResult
 
 
 class mssqlSink(SQLSink):
@@ -98,9 +96,11 @@ class mssqlSink(SQLSink):
         is_temp_table: bool = False,
     ) -> int | None:
         """Bulk insert records to an existing destination table.
-        The default implementation uses a generic SQLAlchemy bulk insert operation.
-        This method may optionally be overridden by developers in order to provide
-        faster, native bulk uploads.
+
+        Uses multi-row INSERT statements chunked to stay within SQL Server's
+        2100-parameter-per-statement limit. TABLOCK enables minimally-logged
+        writes into the heap temp table, which is faster than row-by-row logging.
+
         Args:
             full_table_name: the target table name.
             schema: the JSON schema for the new table, to be used when inferring column
@@ -110,30 +110,37 @@ class mssqlSink(SQLSink):
         Returns:
             True if table exists, False if not, None if unsure or undetectable.
         """
-        insert_sql = self.generate_insert_statement(
-            full_table_name,
-            schema,
-        )
-        if isinstance(insert_sql, str):
-            insert_sql = sqlalchemy.text(insert_sql)
-
-        self.logger.info("Inserting with SQL: %s", insert_sql)
-
         columns = self.column_representation(schema)
+        col_names = [col.name for col in columns]
 
-        # temporary fix to ensure missing properties are added
-        insert_records = []
-        for record in records:
-            insert_record = {}
-            for column in columns:
-                insert_record[column.name] = record.get(column.name)
-            insert_records.append(insert_record)
+        insert_records = [{col: record.get(col) for col in col_names} for record in records]
 
+        if not insert_records:
+            return 0
+
+        quote = self.connector._dialect.identifier_preparer.quote
+        quoted_cols = ", ".join(quote(c) for c in col_names)
+        row_placeholder = "(" + ", ".join(["%s"] * len(col_names)) + ")"
+
+        # SQL Server hard limit: 2100 parameters per statement.
+        rows_per_stmt = max(1, 2100 // len(col_names))
+
+        # TABLOCK enables minimally-logged bulk inserts into heap tables (temp tables
+        # created via SELECT INTO have no clustered index, so they qualify).
+        tablock = " WITH (TABLOCK)" if is_temp_table else ""
+
+        total = 0
         with self.connection.begin():
-            cursor: CursorResult = self.connection.execute(insert_sql, insert_records)
+            for offset in range(0, len(insert_records), rows_per_stmt):
+                chunk = insert_records[offset : offset + rows_per_stmt]
+                placeholders = ", ".join([row_placeholder] * len(chunk))
+                sql = f"INSERT INTO {full_table_name}{tablock} ({quoted_cols}) VALUES {placeholders}"  # noqa: S608
+                params = tuple(row[col] for row in chunk for col in col_names)
+                self.connection.exec_driver_sql(sql, params)
+                total += len(chunk)
 
         with metrics.record_counter(full_table_name) as record_counter:
-            record_counter.increment(cursor.rowcount)
+            record_counter.increment(total)
 
     def column_representation(
         self,
@@ -165,9 +172,9 @@ class mssqlSink(SQLSink):
         schema = self.conform_schema(self.schema)
 
         if self.key_properties:
-            deduped_records = {
-                frozenset(record[k] for k in self.key_properties): record for record in conformed_records
-            }.values()
+            deduped_records = list(
+                {frozenset(record[k] for k in self.key_properties): record for record in conformed_records}.values()
+            )
 
             self.logger.info(f"Preparing table {self.full_table_name}")
             self.connector.prepare_table(
