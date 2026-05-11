@@ -1,9 +1,9 @@
-""" Attempt at making some standard Target Tests. """
+"""Attempt at making some standard Target Tests."""
+
 # flake8: noqa
 import io
 from contextlib import redirect_stdout
 from pathlib import Path
-from urllib.parse import quote
 
 import pytest
 from singer_sdk.testing import sync_end_to_end
@@ -188,11 +188,10 @@ def test_no_primary_keys(mssql_target):
     singer_file_to_target(file_name, mssql_target)
 
 
-# TODO test that data is correct
+# Duplicate primary keys within a batch are deduplicated (last write wins) before upsert.
 def test_duplicate_records(mssql_target):
-    with pytest.raises(Exception) as e_info:
-        file_name = "duplicate_records.singer"
-        singer_file_to_target(file_name, mssql_target)
+    file_name = "duplicate_records.singer"
+    singer_file_to_target(file_name, mssql_target)
 
 
 def test_array_data(mssql_target):

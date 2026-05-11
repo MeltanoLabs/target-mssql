@@ -279,7 +279,9 @@ class mssqlConnector(SQLConnector):
     def get_column_alter_ddl(self, table_name, column_name, column_type):
         # SELECT statement required to work around
         # "Statement not executed or executed statement has no resultset" error
-        # from pymssql
+        # from pymssql.
+        # Strip collation: MSSQL rejects quoted collation names (e.g. COLLATE "...").
+        self.remove_collation(column_type)
         return sqlalchemy.DDL(
             """
             ALTER TABLE %(table_name)s ALTER COLUMN %(column_name)s %(column_type)s
