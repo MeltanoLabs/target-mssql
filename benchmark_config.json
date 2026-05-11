@@ -1,0 +1,9 @@
+{
+  "schema": "dbo",
+  "username": "sa",
+  "password": "P@55w0rd",
+  "host": "localhost",
+  "port": "1433",
+  "database": "master",
+  "table_prefix": "bench_"
+}

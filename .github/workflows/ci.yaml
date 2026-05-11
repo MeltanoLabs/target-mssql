@@ -1,5 +1,7 @@
 name: Target MSSQL tests
 
+permissions: {}
+
 on:
   push:
     branches:
