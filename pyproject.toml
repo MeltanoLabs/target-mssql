@@ -1,14 +1,13 @@
 [project]
 name = "target-mssql"
-version = "0.2.1"
+version = "0.3.0"
 description = "`target-mssql` is a Singer target for mssql, built with the Meltano SDK for Singer Targets."
 authors = [{ name = "Henning Holgersen" }]
-requires-python = ">=3.9,<4"
+requires-python = ">=3.10,<4"
 license = "Apache-2.0"
 keywords = ["ELT", "mssql", "Meltano", "SQL Server"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -17,8 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "pymssql~=2.3.11",
-    "requests>=2.25.1",
-    "singer-sdk~=0.48.1",
+    "singer-sdk[sql]~=0.53.7",
     "sqlalchemy~=2.0",
     "typing-extensions>=4.15.0 ; python_full_version < '3.12'",
 ]
@@ -30,7 +28,7 @@ pyodbc = ["pyodbc>=5,<6"]
 target-mssql = "target_mssql.target:Targetmssql.cli"
 
 [dependency-groups]
-dev = [{ include-group = "lint" }, "mypy>=1", "tox>=4", "types-requests>=2.26"]
+dev = [{ include-group = "lint" }, "mypy>=1", "tox>=4"]
 lint = ["ruff>=0.15"]
 test = ["pytest>=8"]
 
