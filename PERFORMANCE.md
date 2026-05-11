@@ -19,13 +19,18 @@ uv run python target_mssql/tests/generate_benchmark_data.py 100000 \
   | grep -E "METRIC|cpu"
 ```
 
-## Baseline (2026-05-11, local Docker MSSQL 2022, upsert path)
+## Benchmarks (local Docker MSSQL 2022, upsert path, 8-column schema)
 
-| Records | Wall time | Throughput |
-|---------|-----------|------------|
-| 1,000   | 1.63s     | ~610 rec/s |
-| 10,000  | 2.77s     | ~3,610 rec/s |
-| 100,000 | 23.4s     | ~4,270 rec/s |
+| SDK | `bulk_insert_records` | 10k wall time | 100k wall time | Throughput |
+|-----|-----------------------|---------------|----------------|------------|
+| 0.48.1 | executemany (original) | 2.77s | 23.4s | ~4,270 rec/s |
+| 0.48.1 | multi-row INSERT + TABLOCK | 2.77s | 23.3s | ~4,290 rec/s |
+| 0.53.7 | multi-row INSERT + TABLOCK | 2.17s | **21.2s** | ~4,720 rec/s |
+
+The SDK 0.53.x upgrade delivers ~10% throughput improvement with no code changes.
+Our `bulk_insert_records` rewrite did not change raw throughput (the bottleneck is
+SQL Server tempdb I/O, not Python), but it correctly reports row counts and uses
+TABLOCK for minimal logging on the heap temp table.
 
 Fixed startup + first-batch overhead is ~1.3s. At steady state each 10,000-record batch
 takes ~2s through the temp-table + MERGE path.
