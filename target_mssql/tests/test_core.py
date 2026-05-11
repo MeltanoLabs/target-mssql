@@ -74,9 +74,7 @@ def singer_file_to_target(file_name, target) -> None:
 
 # TODO should set schemas for each tap individually so we don't collide
 # Test name would work well
-@pytest.mark.skip(
-    reason="TODO: Something with identity, doesn't make sense. external API, skipping"
-)
+@pytest.mark.skip(reason="TODO: Something with identity, doesn't make sense. external API, skipping")
 def test_countries_to_mssql(mssql_config):
     tap = SampleTapCountries(config={}, state=None)
     target = Targetmssql(config=mssql_config)

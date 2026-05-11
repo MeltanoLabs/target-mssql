@@ -1,1 +1,1 @@
-""" AAPL Sample class """
+"""AAPL Sample class"""

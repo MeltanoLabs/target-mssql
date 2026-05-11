@@ -4,10 +4,7 @@ version = "0.2.1"
 requires-poetry = ">=2"
 description = "`target-mssql` is a Singer target for mssql, built with the Meltano SDK for Singer Targets."
 authors = ["Henning Holgersen"]
-keywords = [
-    "ELT",
-    "mssql",
-]
+keywords = ["ELT", "mssql", "Meltano", "SQL Server"]
 license = "Apache 2.0"
 
 [tool.poetry.dependencies]
@@ -15,9 +12,9 @@ python = "^3.9"
 requests = "^2.25.1"
 singer-sdk = "^0.48.1"
 pymssql = "^2.3.11"
-pyodbc = {version = ">=5,<6", optional = true}
+pyodbc = { version = ">=5,<6", optional = true }
 sqlalchemy = "^2"
-typing-extensions = {version = "^4.15.0", python = "<3.12"}
+typing-extensions = { version = "^4.15.0", python = "<3.12" }
 
 [tool.poetry.extras]
 pyodbc = ["pyodbc"]
@@ -25,17 +22,38 @@ pyodbc = ["pyodbc"]
 [tool.poetry.group.dev.dependencies]
 pytest = "^6.2.5"
 tox = "^3.24.4"
-flake8 = "^3.9.2"
-black = "^22.9"
-pydocstyle = "^6.1.1"
 mypy = "^0.910"
 types-requests = "^2.26.1"
-isort = "^5.10.1"
+ruff = ">=0.15"
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3 # Vertical Hanging Indent
-src_paths = "target_mssql"
+[tool.ruff]
+line-length = 120
+src = ["target_mssql"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "C90",
+    "S",
+    "UP",
+    "SIM",
+    "C4",
+    "FURB",
+    "PERF",
+    "FLY",
+    "B",
+    "TRY",
+    "EM",
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.isort]
+known-first-party = ["target_mssql"]
 
 [build-system]
 requires = ["poetry-core>=1.0.8"]

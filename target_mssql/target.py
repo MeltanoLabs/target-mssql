@@ -49,9 +49,7 @@ class Targetmssql(SQLTarget):
             th.StringType,
             description="Default target schema to write to",
         ),
-        th.Property(
-            "table_prefix", th.StringType, description="Prefix to add to table name"
-        ),
+        th.Property("table_prefix", th.StringType, description="Prefix to add to table name"),
         th.Property(
             "prefer_float_over_numeric",
             th.BooleanType,

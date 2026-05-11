@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
 import sqlalchemy
 from singer_sdk import metrics
@@ -47,7 +48,7 @@ class mssqlSink(SQLSink):
         return self._connector
 
     @property
-    def schema_name(self) -> Optional[str]:
+    def schema_name(self) -> str | None:
         """Return the schema name or `None` if using names with no schema part.
 
         Returns:
@@ -93,9 +94,9 @@ class mssqlSink(SQLSink):
         self,
         full_table_name: str,
         schema: dict,
-        records: Iterable[Dict[str, Any]],
+        records: Iterable[dict[str, Any]],
         is_temp_table: bool = False,
-    ) -> Optional[int]:
+    ) -> int | None:
         """Bulk insert records to an existing destination table.
         The default implementation uses a generic SQLAlchemy bulk insert operation.
         This method may optionally be overridden by developers in order to provide
@@ -137,7 +138,7 @@ class mssqlSink(SQLSink):
     def column_representation(
         self,
         schema: dict,
-    ) -> List[Column]:
+    ) -> list[Column]:
         """Returns a sql alchemy table representation for the current schema."""
         columns: list[Column] = []
         conformed_properties = self.conform_schema(schema)["properties"]
@@ -158,17 +159,14 @@ class mssqlSink(SQLSink):
             context: Stream partition or context dictionary.
         """
         # First we need to be sure the main table is already created
-        conformed_records = (
-            self.conform_record(record) for record in context["records"]
-        )
+        conformed_records = (self.conform_record(record) for record in context["records"])
 
         join_keys = [self.conform_name(key, "column") for key in self.key_properties]
         schema = self.conform_schema(self.schema)
 
         if self.key_properties:
             deduped_records = {
-                frozenset(record[k] for k in self.key_properties): record
-                for record in conformed_records
+                frozenset(record[k] for k in self.key_properties): record for record in conformed_records
             }.values()
 
             self.logger.info(f"Preparing table {self.full_table_name}")
@@ -180,16 +178,10 @@ class mssqlSink(SQLSink):
             )
             # Create a temp table (Creates from the table above)
             self.logger.info(f"Creating temp table {self.full_table_name}")
-            self.connector.create_temp_table_from_table(
-                from_table_name=self.full_table_name
-            )
+            self.connector.create_temp_table_from_table(from_table_name=self.full_table_name)
 
-            db_name, schema_name, table_name = self.parse_full_table_name(
-                self.full_table_name
-            )
-            tmp_table_name = (
-                f"{schema_name}.#{table_name}" if schema_name else f"#{table_name}"
-            )
+            db_name, schema_name, table_name = self.parse_full_table_name(self.full_table_name)
+            tmp_table_name = f"{schema_name}.#{table_name}" if schema_name else f"#{table_name}"
             # Insert into temp table
             self.bulk_insert_records(
                 full_table_name=tmp_table_name,
@@ -218,8 +210,8 @@ class mssqlSink(SQLSink):
         from_table_name: str,
         to_table_name: str,
         schema: dict,
-        join_keys: List[str],
-    ) -> Optional[int]:
+        join_keys: list[str],
+    ) -> int | None:
         """Merge upsert data from one table to another.
         Args:
             from_table_name: The source table name.
@@ -232,17 +224,9 @@ class mssqlSink(SQLSink):
         """
         # TODO think about sql injeciton,
         # issue here https://github.com/MeltanoLabs/target-postgres/issues/22
-        quoted_keys = {
-            key: self.connector._dialect.identifier_preparer.quote(key)
-            for key in schema["properties"]
-        }
+        quoted_keys = {key: self.connector._dialect.identifier_preparer.quote(key) for key in schema["properties"]}
 
-        join_condition = " and ".join(
-            [
-                f"temp.{quoted_keys[key]} = target.{quoted_keys[key]}"
-                for key in join_keys
-            ]
-        )
+        join_condition = " and ".join([f"temp.{quoted_keys[key]} = target.{quoted_keys[key]}" for key in join_keys])
 
         update_stmt = ", ".join(
             [
@@ -258,18 +242,16 @@ class mssqlSink(SQLSink):
             ON {join_condition}
             WHEN MATCHED THEN
                 UPDATE SET
-                    { update_stmt }
+                    {update_stmt}
             WHEN NOT MATCHED THEN
                 INSERT ({", ".join(quoted_keys.values())})
                 VALUES ({", ".join([f"temp.{quoted_key}" for quoted_key in quoted_keys.values()])});
-        """  # nosec
+        """  # noqa: S608
 
         with self.connection.begin():
             self.connection.exec_driver_sql(merge_sql)
 
-    def parse_full_table_name(
-        self, full_table_name: str
-    ) -> tuple[str | None, str | None, str]:
+    def parse_full_table_name(self, full_table_name: str) -> tuple[str | None, str | None, str]:
         """Parse a fully qualified table name into its parts.
         Developers may override this method if their platform does not support the
         traditional 3-part convention: `db_name.schema_name.table_name`
@@ -302,7 +284,7 @@ class mssqlSink(SQLSink):
         name = re.sub("([a-z0-9])([A-Z])", r"\1_\2", name)
         return name.lower()
 
-    def conform_name(self, name: str, object_type: Optional[str] = None) -> str:
+    def conform_name(self, name: str, object_type: str | None = None) -> str:
         """Conform a stream property name to one suitable for the target system.
         Transforms names to snake case by default, applicable to most common DBMSs'.
         Developers may override this method to apply custom transformations

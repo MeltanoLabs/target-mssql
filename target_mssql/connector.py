@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from functools import cached_property
-from typing import Any, Dict, Iterable, List, Optional, cast
+from typing import Any, cast
 
 import sqlalchemy
 from singer_sdk.connectors.sql import SQLConnector
@@ -27,11 +28,11 @@ class mssqlConnector(SQLConnector):
 
     def create_table_with_records(
         self,
-        full_table_name: Optional[str],
+        full_table_name: str | None,
         schema: dict,
-        records: Iterable[Dict[str, Any]],
-        primary_keys: Optional[List[str]] = None,
-        partition_keys: Optional[List[str]] = None,
+        records: Iterable[dict[str, Any]],
+        primary_keys: list[str] | None = None,
+        partition_keys: list[str] | None = None,
         as_temp_table: bool = False,
     ) -> None:
         """Create an empty table.
@@ -54,9 +55,7 @@ class mssqlConnector(SQLConnector):
             schema=schema,
             as_temp_table=as_temp_table,
         )
-        self.bulk_insert_records(
-            full_table_name=full_table_name, schema=schema, records=records
-        )
+        self.bulk_insert_records(full_table_name=full_table_name, schema=schema, records=records)
 
     def get_sqlalchemy_url(self, config: dict) -> str:
         """Generates a SQLAlchemy URL for mssql.
@@ -110,7 +109,8 @@ class mssqlConnector(SQLConnector):
             RuntimeError: if a variant schema is passed with no properties defined.
         """
         if as_temp_table:
-            raise NotImplementedError("Temporary tables are not supported.")
+            msg = "Temporary tables are not supported"
+            raise NotImplementedError(msg)
 
         _ = partition_keys  # Not supported in generic implementation.
 
@@ -121,9 +121,8 @@ class mssqlConnector(SQLConnector):
         try:
             properties: dict = schema["properties"]
         except KeyError:
-            raise RuntimeError(
-                f"Schema for '{full_table_name}' does not define properties: {schema}"
-            )
+            msg = f"Schema for '{full_table_name}' does not define properties: {schema}"
+            raise RuntimeError(msg) from None
         for property_name, property_jsonschema in properties.items():
             is_primary_key = property_name in primary_keys
 
@@ -134,15 +133,9 @@ class mssqlConnector(SQLConnector):
                 columntype = sqlalchemy.types.VARCHAR(255)
 
             if is_primary_key:
-                columns.append(
-                    sqlalchemy.Column(
-                        property_name, columntype, primary_key=True, autoincrement=False
-                    )
-                )
+                columns.append(sqlalchemy.Column(property_name, columntype, primary_key=True, autoincrement=False))
             else:
-                columns.append(
-                    sqlalchemy.Column(property_name, columntype, primary_key=False)
-                )
+                columns.append(sqlalchemy.Column(property_name, columntype, primary_key=False))
 
         _ = sqlalchemy.Table(table_name, meta, *columns, schema=schema_name)
         meta.create_all(self._engine)
@@ -150,16 +143,12 @@ class mssqlConnector(SQLConnector):
     def merge_sql_types(self, sql_types):
         current_type, target_type = sql_types
 
-        if isinstance(current_type, sqlalchemy.DateTime) and isinstance(
-            target_type, mssql.DATETIMEOFFSET
-        ):
+        if isinstance(current_type, sqlalchemy.DateTime) and isinstance(target_type, mssql.DATETIMEOFFSET):
             return target_type
 
         return super().merge_sql_types(sql_types)
 
-    def _jsonschema_type_check(
-        self, jsonschema_type: dict, type_check: tuple[str]
-    ) -> bool:
+    def _jsonschema_type_check(self, jsonschema_type: dict, type_check: tuple[str]) -> bool:
         """Return True if the jsonschema_type supports the provided type.
         Args:
             jsonschema_type: The type dict.
@@ -176,10 +165,7 @@ class mssqlConnector(SQLConnector):
                 if jsonschema_type.get("type") in type_check:
                     return True
 
-        if any(t in type_check for t in jsonschema_type.get("anyOf", ())):
-            return True
-
-        return False
+        return bool(any(t in type_check for t in jsonschema_type.get("anyOf", ())))
 
     def to_sql_type(self, jsonschema_type: dict) -> sqlalchemy.types.TypeEngine:  # noqa
         """Convert JSON Schema type to a SQL type.
@@ -199,13 +185,10 @@ class mssqlConnector(SQLConnector):
                     return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.DATE())
 
             maxlength = jsonschema_type.get("maxLength")
-            if maxlength is not None:
-                if maxlength > 8000:
-                    return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.TEXT())
+            if maxlength is not None and maxlength > 8000:
+                return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.TEXT())
 
-            return cast(
-                sqlalchemy.types.TypeEngine, sqlalchemy.types.VARCHAR(maxlength)
-            )
+            return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.VARCHAR(maxlength))
 
         if self._jsonschema_type_check(jsonschema_type, ("integer",)):
             return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.BIGINT())
@@ -230,12 +213,8 @@ class mssqlConnector(SQLConnector):
         """Temp table from another table."""
 
         db_name, schema_name, table_name = self.parse_full_table_name(from_table_name)
-        full_table_name = (
-            f"{schema_name}.{table_name}" if schema_name else f"{table_name}"
-        )
-        tmp_full_table_name = (
-            f"{schema_name}.#{table_name}" if schema_name else f"#{table_name}"
-        )
+        full_table_name = f"{schema_name}.{table_name}" if schema_name else f"{table_name}"
+        tmp_full_table_name = f"{schema_name}.#{table_name}" if schema_name else f"#{table_name}"
 
         with self.connection.begin():
             droptable = f"DROP TABLE IF EXISTS {tmp_full_table_name}"
@@ -245,7 +224,7 @@ class mssqlConnector(SQLConnector):
                 SELECT TOP 0 *
                 into {tmp_full_table_name}
                 FROM {full_table_name}
-            """  # nosec
+            """  # noqa: S608
 
             self.connection.exec_driver_sql(ddl)
 
