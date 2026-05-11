@@ -118,9 +118,12 @@ class mssqlSink(SQLSink):
         if not insert_records:
             return 0
 
-        quote = self.connector._dialect.identifier_preparer.quote
+        dialect = self.connector._dialect
+        quote = dialect.identifier_preparer.quote
         quoted_cols = ", ".join(quote(c) for c in col_names)
-        row_placeholder = "(" + ", ".join(["%s"] * len(col_names)) + ")"
+        # pymssql uses %s; pyodbc (and most other DBAPIs) use ?
+        param_marker = "?" if getattr(dialect.dbapi, "paramstyle", None) == "qmark" else "%s"
+        row_placeholder = "(" + ", ".join([param_marker] * len(col_names)) + ")"
 
         # SQL Server hard limit: 2100 parameters per statement.
         rows_per_stmt = max(1, 2100 // len(col_names))

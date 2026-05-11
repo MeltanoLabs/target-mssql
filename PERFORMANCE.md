@@ -21,16 +21,21 @@ uv run python target_mssql/tests/generate_benchmark_data.py 100000 \
 
 ## Benchmarks (local Docker MSSQL 2022, upsert path, 8-column schema)
 
-| SDK | `bulk_insert_records` | 10k wall time | 100k wall time | Throughput |
-|-----|-----------------------|---------------|----------------|------------|
-| 0.48.1 | executemany (original) | 2.77s | 23.4s | ~4,270 rec/s |
-| 0.48.1 | multi-row INSERT + TABLOCK | 2.77s | 23.3s | ~4,290 rec/s |
-| 0.53.7 | multi-row INSERT + TABLOCK | 2.17s | **21.2s** | ~4,720 rec/s |
+| SDK | Driver | `bulk_insert_records` | 10k batch time | 100k wall time | Throughput |
+|-----|--------|-----------------------|----------------|----------------|------------|
+| 0.48.1 | pymssql | executemany (original) | 1.97s | 23.4s | ~4,270 rec/s |
+| 0.48.1 | pymssql | multi-row INSERT + TABLOCK | 1.87s | 23.3s | ~4,290 rec/s |
+| 0.53.7 | pymssql | multi-row INSERT + TABLOCK | 2.17s | 21.2s | ~4,720 rec/s |
+| 0.53.7 | **pyodbc** | multi-row INSERT + TABLOCK | **1.48s** | **9.8s** | **~10,240 rec/s** |
 
-The SDK 0.53.x upgrade delivers ~10% throughput improvement with no code changes.
-Our `bulk_insert_records` rewrite did not change raw throughput (the bottleneck is
-SQL Server tempdb I/O, not Python), but it correctly reports row counts and uses
-TABLOCK for minimal logging on the heap temp table.
+pyodbc (ODBC Driver 18 for SQL Server) is **2.2× faster** than pymssql for this workload.
+The ODBC Driver 18 has a more efficient TDS implementation than pymssql/FreeTDS, particularly
+for parameterised multi-row inserts.
+
+The SDK 0.53.x upgrade delivers ~10% throughput improvement over 0.48.1 with pymssql.
+Our `bulk_insert_records` rewrite did not change raw throughput (the bottleneck is SQL
+Server tempdb I/O), but it correctly reports row counts, uses TABLOCK for minimal logging,
+and works correctly with both pymssql (`%s`) and pyodbc (`?`) parameter styles.
 
 Fixed startup + first-batch overhead is ~1.3s. At steady state each 10,000-record batch
 takes ~2s through the temp-table + MERGE path.
