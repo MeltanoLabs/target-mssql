@@ -140,7 +140,7 @@ dmypy.json
 .devcontainer/
 plugins/
 config.json
-poetry.lock
+uv.lock
 .dccache
 _jottings.py
 .security-notes.json

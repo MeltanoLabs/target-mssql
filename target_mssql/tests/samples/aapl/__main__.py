@@ -1,6 +1,6 @@
 """Executable for fundamentals tap.
 Run:
-$ poetry run python samples/aapl
+$ uv run python samples/aapl
 """
 
 from aapl import Fundamentals

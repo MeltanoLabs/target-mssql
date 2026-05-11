@@ -21,16 +21,11 @@ jobs:
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
         python-version: '${{ matrix.python-version }}'
-    - name: Install Poetry
-      uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a # v1.4.1
-      with:
-        version: 2.0.1
-    - name: Install dependencies
-      run: |
-        poetry install
+    - name: Install uv
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
     - name: Run lint command from tox.ini
       run: |
-        poetry run tox -e lint
+        uvx tox -e lint
   pytest:
     runs-on: ubuntu-latest
     services:
@@ -57,13 +52,11 @@ jobs:
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
         python-version: '${{ matrix.python-version }}'
-    - name: Install Poetry
-      uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a # v1.4.1
-      with:
-        version: 2.0.1
+    - name: Install uv
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
     - name: Install dependencies
       run: |
-        poetry install
+        uv sync
     - name: Test with pytest
       run: |
-        poetry run pytest --capture=no
+        uv run pytest --capture=no

@@ -1,30 +1,45 @@
-[tool.poetry]
+[project]
 name = "target-mssql"
 version = "0.2.1"
-requires-poetry = ">=2"
 description = "`target-mssql` is a Singer target for mssql, built with the Meltano SDK for Singer Targets."
-authors = ["Henning Holgersen"]
+authors = [{ name = "Henning Holgersen" }]
+requires-python = ">=3.9,<4"
+license = "Apache-2.0"
 keywords = ["ELT", "mssql", "Meltano", "SQL Server"]
-license = "Apache 2.0"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "pymssql~=2.3.11",
+    "requests>=2.25.1",
+    "singer-sdk~=0.48.1",
+    "sqlalchemy~=2.0",
+    "typing-extensions>=4.15.0 ; python_full_version < '3.12'",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.9,<4"
-pyodbc = { version = ">=5,<6", optional = true }
-pymssql = "~=2.3.11"
-requests = ">=2.25.1"
-singer-sdk = "~=0.48.1"
-sqlalchemy = "~=2.0"
-typing-extensions = { version = ">=4.15.0", python = "<3.12" }
+[project.optional-dependencies]
+pyodbc = ["pyodbc>=5,<6"]
 
-[tool.poetry.extras]
-pyodbc = ["pyodbc"]
+[project.scripts]
+target-mssql = "target_mssql.target:Targetmssql.cli"
 
-[tool.poetry.group.dev.dependencies]
-mypy = ">=1"
-pytest = ">=8"
-ruff = ">=0.15"
-tox = ">=4"
-types-requests = ">=2.26"
+[dependency-groups]
+dev = [{ include-group = "lint" }, "mypy>=1", "tox>=4", "types-requests>=2.26"]
+lint = ["ruff>=0.15"]
+test = ["pytest>=8"]
+
+[tool.uv]
+default-groups = "all"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.ruff]
 line-length = 120
@@ -54,11 +69,3 @@ max-complexity = 10
 
 [tool.ruff.lint.isort]
 known-first-party = ["target_mssql"]
-
-[build-system]
-requires = ["poetry-core>=1.0.8"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.poetry.scripts]
-# CLI declaration
-target-mssql = 'target_mssql.target:Targetmssql.cli'
