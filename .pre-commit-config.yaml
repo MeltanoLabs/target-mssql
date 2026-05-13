@@ -15,3 +15,9 @@ repos:
     rev: 0.11.13
     hooks:
     - id: uv-sync
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.37.2
+    hooks:
+      - id: check-dependabot
+      - id: check-github-workflows
+      - id: check-meltano
