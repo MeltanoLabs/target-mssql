@@ -7,23 +7,74 @@ default_environment: prod
 send_anonymous_usage_stats: true
 project_id: target-mssql
 plugins:
-  extractors: []
+  extractors:
+  - name: tap-smoke-test
+    variant: meltano
+    pip_url: git+https://github.com/meltano/tap-smoke-test.git
+    config:
+      streams:
+      - stream_name: animale
+        input_filename: https://raw.githubusercontent.com/meltano/tap-smoke-test/refs/heads/main/demo-data/animals-data.jsonl
   loaders:
-  - name: "target-mssql"
-    namespace: "target_mssql"
+  - name: target-mssql
+    namespace: target_mssql
     pip_url: -e .
     capabilities:
+    - about
     - schema-flattening
     - stream-maps
-    config:
-      start_date: '2010-01-01T00:00:00Z'
+    - structured-logging
     settings:
+    - name: sqlalchemy_url
+      kind: string
+      label: SQLAlchemy URL
+      description: SQLAlchemy connection string
     - name: username
+      kind: string
+      label: Username
+      description: SQL Server username
     - name: password
       kind: password
-    - name: start_date
-      value: '2010-01-01T00:00:00Z'
+      label: Password
+      description: SQL Server password
+      sensitive: true
     - name: host
+      kind: string
+      label: Host
+      description: SQL Server host
     - name: port
+      kind: string
+      value: '1433'
+      label: Port
+      description: SQL Server port
     - name: database
+      kind: string
+      label: Database
+      description: SQL Server database
     - name: default_target_schema
+      kind: string
+      label: Default Target Schema
+      description: Default target schema to write to
+    - name: table_prefix
+      kind: string
+      label: Table Prefix
+      description: Prefix to add to table name
+    - name: prefer_float_over_numeric
+      kind: boolean
+      value: false
+      label: Prefer Float Over Numeric
+      description: Use float data type for numbers (otherwise number type is used)
+    - name: driver
+      kind: string
+      value: pymssql
+      label: Driver
+      description: The driver to use for the database connection (pymssql or pyodbc)
+    - name: odbc_driver
+      kind: string
+      label: ODBC Driver
+      description: The ODBC driver to use when driver=pyodbc (e.g. 'ODBC Driver 18 for SQL Server')
+    - name: trust_server_certificate
+      kind: boolean
+      value: false
+      label: Trust Server Certificate
+      description: Trust the server certificate without validation (useful for self-signed certs)
