@@ -27,12 +27,15 @@ uv run python target_mssql/tests/generate_benchmark_data.py 100000 \
 | 0.48.1 | pymssql | multi-row INSERT + TABLOCK | 1.87s | 23.3s | ~4,290 rec/s |
 | 0.53.7 | pymssql | multi-row INSERT + TABLOCK | 2.17s | 21.2s | ~4,720 rec/s |
 | 0.53.7 | **pyodbc** | multi-row INSERT + TABLOCK | **1.48s** | **9.8s** | **~10,240 rec/s** |
+| 0.54.0 | pymssql | multi-row INSERT + TABLOCK | — | 22.0s | ~4,550 rec/s |
+| 0.54.0 | pyodbc | multi-row INSERT + TABLOCK | — | 9.5s | ~10,530 rec/s |
 
 pyodbc (ODBC Driver 18 for SQL Server) is **2.2× faster** than pymssql for this workload.
 The ODBC Driver 18 has a more efficient TDS implementation than pymssql/FreeTDS, particularly
 for parameterised multi-row inserts.
 
-The SDK 0.53.x upgrade delivers ~10% throughput improvement over 0.48.1 with pymssql.
+SDK 0.54.0 shows no significant change vs 0.53.7 (within measurement noise).
+SDK 0.53.x delivered ~10% throughput improvement over 0.48.1 with pymssql.
 Our `bulk_insert_records` rewrite did not change raw throughput (the bottleneck is SQL
 Server tempdb I/O), but it correctly reports row counts, uses TABLOCK for minimal logging,
 and works correctly with both pymssql (`%s`) and pyodbc (`?`) parameter styles.
