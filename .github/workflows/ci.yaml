@@ -33,7 +33,7 @@ jobs:
       uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
     - name: Run lint command from tox.ini
       run: |
-        uvx tox -e lint
+        uvx --with tox-uv tox -e lint
 
   build-package:
     name: Build & verify package
@@ -84,4 +84,4 @@ jobs:
       env:
         PYTHON_VERSION: ${{ matrix.python-version }}
       run: |
-        uvx tox -e $PYTHON_VERSION
+        uvx --with tox-uv tox -e $PYTHON_VERSION

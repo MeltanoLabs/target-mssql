@@ -1,5 +1,6 @@
 requires = [
   "tox>=4.54",
+  "tox-uv",
 ]
 envlist = [
     "lint",

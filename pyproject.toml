@@ -30,7 +30,7 @@ pyodbc = ["pyodbc>=5,<6"]
 target-mssql = "target_mssql.target:Targetmssql.cli"
 
 [dependency-groups]
-dev = [{ include-group = "lint" }, "mypy>=1", "tox>=4"]
+dev = [{ include-group = "lint" }, "mypy>=1"]
 lint = ["ruff>=0.15"]
 test = ["pytest>=9"]
 
@@ -47,7 +47,10 @@ source = "vcs"
 
 [tool.pytest]
 addopts = ["-ra"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    "once:Python .* will reach its end of life:singer_sdk.helpers._compat.SingerSDKPythonEOLWarning",
+]
 log_level = "INFO"
 minversion = "9"
 strict = true

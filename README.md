@@ -13,40 +13,14 @@ Build with the [Meltano Target SDK](https://sdk.meltano.com).
 
 Install from Meltano:
 ```bash
-meltano add loader target-mssql
-```
-
-Install from PyPi:
-
-```bash
-pipx install target-mssql
+meltano add target-mssql
 ```
 
 Install from GitHub:
 
 ```bash
-pipx install git+https://github.com/storebrand/target-mssql.git@main
+uv tool install git+https://github.com/storebrand/target-mssql.git@main
 ```
-
-<!--
-
-Developer TODO: Update the below as needed to correctly describe the install procedure. For instance, if you do not have a PyPi repo, or if you want users to directly install from your git repo, you can modify this step as appropriate.
-
-## Installation
-
-Install from PyPi:
-
-```bash
-pipx install target-mssql
-```
-
-Install from GitHub:
-
-```bash
-pipx install git+https://github.com/storebrand/target-mssql.git@main
-```
-
--->
 
 ## Configuration
 
