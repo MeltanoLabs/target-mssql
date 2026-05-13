@@ -1,9 +1,11 @@
 [project]
 name = "target-mssql"
-version = "0.3.0"
-description = "`target-mssql` is a Singer target for mssql, built with the Meltano SDK for Singer Targets."
+dynamic = ["version"]
+description = "Singer target for mssql, built with the Meltano SDK for Singer Targets."
 authors = [{ name = "Henning Holgersen" }]
-requires-python = ">=3.10,<4"
+maintainers = [{ name = "Meltano", email = "hello@meltano.com" }]
+readme = "README.md"
+requires-python = ">=3.10"
 license = "Apache-2.0"
 keywords = ["ELT", "mssql", "Meltano", "SQL Server"]
 classifiers = [
@@ -30,18 +32,29 @@ target-mssql = "target_mssql.target:Targetmssql.cli"
 [dependency-groups]
 dev = [{ include-group = "lint" }, "mypy>=1", "tox>=4"]
 lint = ["ruff>=0.15"]
-test = ["pytest>=8"]
+test = ["pytest>=9"]
 
 [tool.uv]
 default-groups = "all"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+fallback-version = "0.0.0.dev0"
+source = "vcs"
+
+[tool.pytest]
+addopts = ["-ra"]
+filterwarnings = ["error"]
+log_level = "INFO"
+minversion = "9"
+strict = true
+testpaths = ["target_mssql/tests"]
 
 [tool.ruff]
 line-length = 120
-src = ["target_mssql"]
 
 [tool.ruff.lint]
 select = [

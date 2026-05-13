@@ -5,8 +5,8 @@ from functools import cached_property
 from typing import Any, cast
 
 import sqlalchemy
-from singer_sdk.connectors.sql import SQLConnector
 from singer_sdk.helpers._typing import get_datelike_property_type
+from singer_sdk.sql import SQLConnector
 from sqlalchemy.dialects import mssql
 
 

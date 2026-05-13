@@ -8,9 +8,8 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from singer_sdk import metrics
-from singer_sdk.connectors.sql import SQLConnector
 from singer_sdk.helpers._conformers import replace_leading_digit
-from singer_sdk.sinks.sql import SQLSink
+from singer_sdk.sql import SQLConnector, SQLSink
 from sqlalchemy import Column
 
 from target_mssql.connector import mssqlConnector

@@ -1,0 +1,32 @@
+requires = [
+  "tox>=4.54",
+]
+envlist = [
+    "lint",
+    { product = [
+        { prefix = "3.", start = 10, stop = 14 },
+    ] },
+]
+
+[env_run_base]
+description = "run tests on Python {py_dot_ver}"
+dependency_groups = [
+    "test"
+]
+commands = [["pytest", "--capture=no"]]
+
+[env.format]
+description = "format code"
+dependency_groups = ["lint"]
+commands = [
+    ["ruff", "format", "target_mssql"],
+    ["ruff", "check", "--fix", "target_mssql"],
+]
+
+[env.lint]
+description = "lint code"
+dependency_groups = ["lint"]
+commands = [
+    ["ruff", "format", "--check", "target_mssql"],
+    ["ruff", "check", "target_mssql"],
+]

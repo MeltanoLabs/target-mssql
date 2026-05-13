@@ -7,14 +7,23 @@ on:
     branches:
       - main
   pull_request:
-    branches:
-      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  FORCE_COLOR: 1
 
 jobs:
   linting:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
     - name: Set up Python '${{ matrix.python-version }}'
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
@@ -25,11 +34,27 @@ jobs:
     - name: Run lint command from tox.ini
       run: |
         uvx tox -e lint
+
+  build-package:
+    name: Build & verify package
+    runs-on: ubuntu-latest
+    outputs:
+      supported-python-versions: ${{ steps.baipp.outputs.supported_python_classifiers_json_array }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: hynek/build-and-inspect-python-package@d44ca7d91762de7a7d5436ddae667c6da6d1c3df # v2.18.0
+        id: baipp
+
   pytest:
+    name: Test
+    needs: [build-package]
     runs-on: ubuntu-latest
     services:
       mssql:
-        image: mcr.microsoft.com/mssql/server:2019-latest
+        image: mcr.microsoft.com/mssql/server:${{ matrix.mssql-image }}
         env:
           SA_PASSWORD: P@55w0rd
           ACCEPT_EULA: "Y"
@@ -37,24 +62,26 @@ jobs:
         ports:
           - 1433:1433
     strategy:
+      max-parallel: 3
       matrix:
-        python-version:
-        - "3.10"
-        - "3.11"
-        - "3.12"
-        - "3.13"
-        - "3.14"
+        python-version: ${{ fromJson(needs.build-package.outputs.supported-python-versions) }}
+        mssql-image:
+        - 2019-latest@sha256:5b89fce40832a459ad4d634e9d588ae1e4496e664d9a4a9f8baeed6949b53fef
+        - 2022-latest@sha256:d01cc45e6b920eff17abc60295b8748821e09b678f0fcf54959ef37406b80203
+        - 2025-latest@sha256:320daf857745ef0092c6e53e82d0bf81ed6bca2794e6ccbffb72cf6a8d14a441
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-    - name: Set up Python '${{ matrix.python-version }}'
-      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
-        python-version: '${{ matrix.python-version }}'
+        persist-credentials: false
     - name: Install uv
       uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      with:
+        python-version: '${{ matrix.python-version }}'
     - name: Install dependencies
       run: |
         uv sync
     - name: Test with pytest
+      env:
+        PYTHON_VERSION: ${{ matrix.python-version }}
       run: |
-        uv run pytest --capture=no
+        uvx tox -e $PYTHON_VERSION
