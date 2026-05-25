@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from singer_sdk import metrics
@@ -15,6 +14,8 @@ from sqlalchemy import Column
 from target_mssql.connector import mssqlConnector
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from singer_sdk.plugin_base import PluginBase
 
 
