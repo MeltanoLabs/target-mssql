@@ -96,20 +96,17 @@ class mssqlSink(SQLSink):
         full_table_name: str | FullyQualifiedName,
         schema: dict,
         records: Iterable[dict[str, Any]],
-        is_temp_table: bool = False,
     ) -> int | None:
         """Bulk insert records to an existing destination table.
 
         Uses multi-row INSERT statements chunked to stay within SQL Server's
-        2100-parameter-per-statement limit. TABLOCK enables minimally-logged
-        writes into the heap temp table, which is faster than row-by-row logging.
+        2100-parameter-per-statement limit.
 
         Args:
             full_table_name: the target table name.
             schema: the JSON schema for the new table, to be used when inferring column
                 names.
             records: the input records.
-            is_temp_table: whether the table is a temp table.
         Returns:
             True if table exists, False if not, None if unsure or undetectable.
         """
@@ -131,21 +128,17 @@ class mssqlSink(SQLSink):
         # SQL Server hard limit: 2100 parameters per statement.
         rows_per_stmt = max(1, 2100 // len(col_names))
 
-        # TABLOCK enables minimally-logged bulk inserts into heap tables (temp tables
-        # created via SELECT INTO have no clustered index, so they qualify).
-        tablock = " WITH (TABLOCK)" if is_temp_table else ""
-
         total = 0
         with connection.begin():
             for offset in range(0, len(insert_records), rows_per_stmt):
                 chunk = insert_records[offset : offset + rows_per_stmt]
                 placeholders = ", ".join([row_placeholder] * len(chunk))
-                sql = f"INSERT INTO {full_table_name}{tablock} ({quoted_cols}) VALUES {placeholders}"  # noqa: S608
+                sql = f"INSERT INTO {full_table_name} ({quoted_cols}) VALUES {placeholders}"  # noqa: S608
                 params = tuple(row[col] for row in chunk for col in col_names)
                 connection.exec_driver_sql(sql, params)
                 total += len(chunk)
 
-        with metrics.record_counter(full_table_name) as record_counter:
+        with metrics.record_counter(str(full_table_name)) as record_counter:
             record_counter.increment(total)
 
     def column_representation(
@@ -171,16 +164,11 @@ class mssqlSink(SQLSink):
         Args:
             context: Stream partition or context dictionary.
         """
-        # First we need to be sure the main table is already created
         conformed_records = (self.conform_record(record) for record in context["records"])
 
         join_keys = [self.conform_name(key, "column") for key in self.key_properties]
         schema = self.conform_schema(self.schema)
 
-        # One connection per process_batch call. MSSQL `#temp` tables are
-        # session-scoped, so CREATE → INSERT → MERGE must share a connection;
-        # but different sinks/batches must NOT share, or they serialise on
-        # this single socket.
         with self.connector._engine.connect() as connection:
             if self.key_properties:
                 deduped_records = list(
@@ -194,30 +182,12 @@ class mssqlSink(SQLSink):
                     primary_keys=join_keys,
                     as_temp_table=False,
                 )
-                # Create a temp table (Creates from the table above)
-                self.logger.info(f"Creating temp table {self.full_table_name}")
-                self.connector.create_temp_table_from_table(
+                self.logger.info(f"Upserting {len(deduped_records)} records into {self.full_table_name}")
+                self.merge_upsert_records(
                     connection=connection,
-                    from_table_name=self.full_table_name,
-                )
-
-                db_name, schema_name, table_name = self.parse_full_table_name(self.full_table_name)
-                tmp_table_name = f"{schema_name}.#{table_name}" if schema_name else f"#{table_name}"
-                # Insert into temp table
-                self.bulk_insert_records(
-                    connection=connection,
-                    full_table_name=tmp_table_name,
+                    full_table_name=self.full_table_name,
                     schema=schema,
                     records=deduped_records,
-                    is_temp_table=True,
-                )
-                # Merge data from Temp table to main table
-                self.logger.info(f"Merging data from temp table to {self.full_table_name}")
-                self.merge_upsert_from_table(
-                    connection=connection,
-                    from_table_name=tmp_table_name,
-                    to_table_name=self.full_table_name,
-                    schema=schema,
                     join_keys=join_keys,
                 )
 
@@ -228,6 +198,71 @@ class mssqlSink(SQLSink):
                     schema=schema,
                     records=conformed_records,
                 )
+
+    def merge_upsert_records(
+        self,
+        connection: Connection,
+        full_table_name: str | FullyQualifiedName,
+        schema: dict,
+        records: list[dict[str, Any]],
+        join_keys: list[str],
+    ) -> None:
+        """Upsert records directly using chunked MERGE … USING (VALUES …) AS source(…).
+
+        Avoids writing to tempdb entirely, eliminating page-latch contention that
+        occurs under concurrent loads (e.g. Azure SQL with multiple parallel streams).
+        Records are chunked to stay within SQL Server's 2100-parameter-per-statement
+        limit. All chunks share one transaction.
+
+        Args:
+            connection: Active SQLAlchemy connection.
+            full_table_name: The destination table name.
+            schema: Singer JSON schema for the stream.
+            records: Pre-deduplicated records to upsert.
+            join_keys: Column names used in the ON clause.
+        """
+        if not records:
+            return
+
+        columns = self.column_representation(schema)
+        col_names = [col.name for col in columns]
+
+        dialect = self.connector._dialect
+        quote = dialect.identifier_preparer.quote
+        quoted = {col: quote(col) for col in col_names}
+
+        param_marker = "?" if getattr(dialect.dbapi, "paramstyle", None) == "qmark" else "%s"
+        row_placeholder = "(" + ", ".join([param_marker] * len(col_names)) + ")"
+        rows_per_stmt = max(1, 2100 // len(col_names))
+
+        join_condition = " AND ".join(f"target.{quoted[k]} = source.{quoted[k]}" for k in join_keys)
+        update_cols = [c for c in col_names if c not in join_keys]
+        update_stmt = ", ".join(f"target.{quoted[c]} = source.{quoted[c]}" for c in update_cols)
+        all_quoted = ", ".join(quoted[c] for c in col_names)
+        source_vals = ", ".join(f"source.{quoted[c]}" for c in col_names)
+
+        matched_clause = f"WHEN MATCHED THEN UPDATE SET {update_stmt}" if update_stmt else ""
+
+        total = 0
+        with connection.begin():
+            for offset in range(0, len(records), rows_per_stmt):
+                chunk = records[offset : offset + rows_per_stmt]
+                placeholders = ", ".join([row_placeholder] * len(chunk))
+                params = tuple(row.get(col) for row in chunk for col in col_names)
+
+                merge_sql = f"""
+                    MERGE INTO {full_table_name} AS target
+                    USING (VALUES {placeholders}) AS source({all_quoted})
+                    ON ({join_condition})
+                    {matched_clause}
+                    WHEN NOT MATCHED BY TARGET THEN
+                        INSERT ({all_quoted}) VALUES ({source_vals});
+                """  # noqa: S608
+                connection.exec_driver_sql(merge_sql, params)
+                total += len(chunk)
+
+        with metrics.record_counter(str(full_table_name)) as record_counter:
+            record_counter.increment(total)
 
     def merge_upsert_from_table(
         self,
