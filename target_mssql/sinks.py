@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from singer_sdk import metrics
@@ -15,7 +14,11 @@ from sqlalchemy import Column
 from target_mssql.connector import mssqlConnector
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from singer_sdk.plugin_base import PluginBase
+    from singer_sdk.sql.connector import FullyQualifiedName
+    from sqlalchemy.engine import Connection
 
 
 class mssqlSink(SQLSink):
@@ -89,8 +92,8 @@ class mssqlSink(SQLSink):
 
     def bulk_insert_records(
         self,
-        connection,
-        full_table_name: str,
+        connection: Connection,
+        full_table_name: str | FullyQualifiedName,
         schema: dict,
         records: Iterable[dict[str, Any]],
         is_temp_table: bool = False,
@@ -228,9 +231,9 @@ class mssqlSink(SQLSink):
 
     def merge_upsert_from_table(
         self,
-        connection,
-        from_table_name: str,
-        to_table_name: str,
+        connection: Connection,
+        from_table_name: str | FullyQualifiedName,
+        to_table_name: str | FullyQualifiedName,
         schema: dict,
         join_keys: list[str],
     ) -> int | None:

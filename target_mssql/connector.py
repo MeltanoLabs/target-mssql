@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import sqlalchemy
 from singer_sdk.helpers._typing import get_datelike_property_type
 from singer_sdk.sql import SQLConnector
 from sqlalchemy.dialects import mssql
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from singer_sdk.sql.connector import FullyQualifiedName
+    from sqlalchemy.engine import Connection
 
 
 class mssqlConnector(SQLConnector):
@@ -177,38 +182,42 @@ class mssqlConnector(SQLConnector):
             datelike_type = get_datelike_property_type(jsonschema_type)
             if datelike_type:
                 if datelike_type == "date-time":
-                    return cast(sqlalchemy.types.TypeEngine, mssql.DATETIMEOFFSET())
+                    return cast("sqlalchemy.types.TypeEngine", mssql.DATETIMEOFFSET())
                 if datelike_type in "time":
-                    return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.TIME())
+                    return cast("sqlalchemy.types.TypeEngine", sqlalchemy.types.TIME())
                 if datelike_type == "date":
-                    return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.DATE())
+                    return cast("sqlalchemy.types.TypeEngine", sqlalchemy.types.DATE())
 
             maxlength = jsonschema_type.get("maxLength")
             if maxlength is not None and maxlength > 8000:
-                return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.TEXT())
+                return cast("sqlalchemy.types.TypeEngine", sqlalchemy.types.TEXT())
 
-            return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.VARCHAR(maxlength))
+            return cast("sqlalchemy.types.TypeEngine", sqlalchemy.types.VARCHAR(maxlength))
 
         if self._jsonschema_type_check(jsonschema_type, ("integer",)):
-            return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.BIGINT())
+            return cast("sqlalchemy.types.TypeEngine", sqlalchemy.types.BIGINT())
 
         if self._jsonschema_type_check(jsonschema_type, ("number",)):
             if self.config.get("prefer_float_over_numeric", False):
-                return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.FLOAT())
-            return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.NUMERIC(38, 16))
+                return cast("sqlalchemy.types.TypeEngine", sqlalchemy.types.FLOAT())
+            return cast("sqlalchemy.types.TypeEngine", sqlalchemy.types.NUMERIC(38, 16))
 
         if self._jsonschema_type_check(jsonschema_type, ("boolean",)):
-            return cast(sqlalchemy.types.TypeEngine, mssql.VARCHAR(1))
+            return cast("sqlalchemy.types.TypeEngine", mssql.VARCHAR(1))
 
         if self._jsonschema_type_check(jsonschema_type, ("object",)):
-            return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.VARCHAR())
+            return cast("sqlalchemy.types.TypeEngine", sqlalchemy.types.VARCHAR())
 
         if self._jsonschema_type_check(jsonschema_type, ("array",)):
-            return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.JSON())
+            return cast("sqlalchemy.types.TypeEngine", sqlalchemy.types.JSON())
 
-        return cast(sqlalchemy.types.TypeEngine, sqlalchemy.types.VARCHAR())
+        return cast("sqlalchemy.types.TypeEngine", sqlalchemy.types.VARCHAR())
 
-    def create_temp_table_from_table(self, connection, from_table_name):
+    def create_temp_table_from_table(
+        self,
+        connection: Connection,
+        from_table_name: str | FullyQualifiedName,
+    ) -> None:
         """Temp table from another table.
 
         The temp table is created on the supplied connection so that subsequent
