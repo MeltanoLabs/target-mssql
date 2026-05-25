@@ -31,7 +31,7 @@ target-mssql = "target_mssql.target:Targetmssql.cli"
 
 [dependency-groups]
 dev = [{ include-group = "lint" }, "mypy>=2.1.0"]
-lint = ["ruff>=0.15.12"]
+lint = ["ruff>=0.15.13"]
 test = ["pytest>=9.0.3"]
 
 [tool.uv]
