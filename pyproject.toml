@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "pymssql~=2.3.13",
-    "singer-sdk[sql]~=0.54.0",
+    "singer-sdk[sql]~=0.54.2",
     "sqlalchemy~=2.0",
     "typing-extensions>=4.15.0 ; python_full_version < '3.12'",
 ]
@@ -31,7 +31,7 @@ target-mssql = "target_mssql.target:Targetmssql.cli"
 
 [dependency-groups]
 dev = [{ include-group = "lint" }, "mypy>=2.1.0"]
-lint = ["ruff>=0.15.12"]
+lint = ["ruff>=0.15.13"]
 test = ["pytest>=9.0.3"]
 
 [tool.uv]
