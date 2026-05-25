@@ -89,6 +89,7 @@ class mssqlSink(SQLSink):
 
     def bulk_insert_records(
         self,
+        connection,
         full_table_name: str,
         schema: dict,
         records: Iterable[dict[str, Any]],
@@ -132,13 +133,13 @@ class mssqlSink(SQLSink):
         tablock = " WITH (TABLOCK)" if is_temp_table else ""
 
         total = 0
-        with self.connection.begin():
+        with connection.begin():
             for offset in range(0, len(insert_records), rows_per_stmt):
                 chunk = insert_records[offset : offset + rows_per_stmt]
                 placeholders = ", ".join([row_placeholder] * len(chunk))
                 sql = f"INSERT INTO {full_table_name}{tablock} ({quoted_cols}) VALUES {placeholders}"  # noqa: S608
                 params = tuple(row[col] for row in chunk for col in col_names)
-                self.connection.exec_driver_sql(sql, params)
+                connection.exec_driver_sql(sql, params)
                 total += len(chunk)
 
         with metrics.record_counter(full_table_name) as record_counter:
@@ -173,49 +174,61 @@ class mssqlSink(SQLSink):
         join_keys = [self.conform_name(key, "column") for key in self.key_properties]
         schema = self.conform_schema(self.schema)
 
-        if self.key_properties:
-            deduped_records = list(
-                {frozenset(record[k] for k in self.key_properties): record for record in conformed_records}.values()
-            )
+        # One connection per process_batch call. MSSQL `#temp` tables are
+        # session-scoped, so CREATE → INSERT → MERGE must share a connection;
+        # but different sinks/batches must NOT share, or they serialise on
+        # this single socket.
+        with self.connector._engine.connect() as connection:
+            if self.key_properties:
+                deduped_records = list(
+                    {frozenset(record[k] for k in self.key_properties): record for record in conformed_records}.values()
+                )
 
-            self.logger.info(f"Preparing table {self.full_table_name}")
-            self.connector.prepare_table(
-                full_table_name=self.full_table_name,
-                schema=schema,
-                primary_keys=join_keys,
-                as_temp_table=False,
-            )
-            # Create a temp table (Creates from the table above)
-            self.logger.info(f"Creating temp table {self.full_table_name}")
-            self.connector.create_temp_table_from_table(from_table_name=self.full_table_name)
+                self.logger.info(f"Preparing table {self.full_table_name}")
+                self.connector.prepare_table(
+                    full_table_name=self.full_table_name,
+                    schema=schema,
+                    primary_keys=join_keys,
+                    as_temp_table=False,
+                )
+                # Create a temp table (Creates from the table above)
+                self.logger.info(f"Creating temp table {self.full_table_name}")
+                self.connector.create_temp_table_from_table(
+                    connection=connection,
+                    from_table_name=self.full_table_name,
+                )
 
-            db_name, schema_name, table_name = self.parse_full_table_name(self.full_table_name)
-            tmp_table_name = f"{schema_name}.#{table_name}" if schema_name else f"#{table_name}"
-            # Insert into temp table
-            self.bulk_insert_records(
-                full_table_name=tmp_table_name,
-                schema=schema,
-                records=deduped_records,
-                is_temp_table=True,
-            )
-            # Merge data from Temp table to main table
-            self.logger.info(f"Merging data from temp table to {self.full_table_name}")
-            self.merge_upsert_from_table(
-                from_table_name=tmp_table_name,
-                to_table_name=self.full_table_name,
-                schema=schema,
-                join_keys=join_keys,
-            )
+                db_name, schema_name, table_name = self.parse_full_table_name(self.full_table_name)
+                tmp_table_name = f"{schema_name}.#{table_name}" if schema_name else f"#{table_name}"
+                # Insert into temp table
+                self.bulk_insert_records(
+                    connection=connection,
+                    full_table_name=tmp_table_name,
+                    schema=schema,
+                    records=deduped_records,
+                    is_temp_table=True,
+                )
+                # Merge data from Temp table to main table
+                self.logger.info(f"Merging data from temp table to {self.full_table_name}")
+                self.merge_upsert_from_table(
+                    connection=connection,
+                    from_table_name=tmp_table_name,
+                    to_table_name=self.full_table_name,
+                    schema=schema,
+                    join_keys=join_keys,
+                )
 
-        else:
-            self.bulk_insert_records(
-                full_table_name=self.full_table_name,
-                schema=schema,
-                records=conformed_records,
-            )
+            else:
+                self.bulk_insert_records(
+                    connection=connection,
+                    full_table_name=self.full_table_name,
+                    schema=schema,
+                    records=conformed_records,
+                )
 
     def merge_upsert_from_table(
         self,
+        connection,
         from_table_name: str,
         to_table_name: str,
         schema: dict,
@@ -257,8 +270,8 @@ class mssqlSink(SQLSink):
                 VALUES ({", ".join([f"temp.{quoted_key}" for quoted_key in quoted_keys.values()])});
         """  # noqa: S608
 
-        with self.connection.begin():
-            self.connection.exec_driver_sql(merge_sql)
+        with connection.begin():
+            connection.exec_driver_sql(merge_sql)
 
     def parse_full_table_name(self, full_table_name: str) -> tuple[str | None, str | None, str]:
         """Parse a fully qualified table name into its parts.
