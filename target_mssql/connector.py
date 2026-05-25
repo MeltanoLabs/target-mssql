@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlalchemy
@@ -10,6 +9,9 @@ from sqlalchemy.dialects import mssql
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from singer_sdk.sql.connector import FullyQualifiedName
+    from sqlalchemy.engine import Connection
 
 
 class mssqlConnector(SQLConnector):
@@ -211,16 +213,25 @@ class mssqlConnector(SQLConnector):
 
         return cast("sqlalchemy.types.TypeEngine", sqlalchemy.types.VARCHAR())
 
-    def create_temp_table_from_table(self, from_table_name):
-        """Temp table from another table."""
+    def create_temp_table_from_table(
+        self,
+        connection: Connection,
+        from_table_name: str | FullyQualifiedName,
+    ) -> None:
+        """Temp table from another table.
 
+        The temp table is created on the supplied connection so that subsequent
+        INSERT / MERGE statements in the same `process_batch` call (which must
+        share the connection because MSSQL `#temp` tables are session-scoped)
+        can see it.
+        """
         db_name, schema_name, table_name = self.parse_full_table_name(from_table_name)
         full_table_name = f"{schema_name}.{table_name}" if schema_name else f"{table_name}"
         tmp_full_table_name = f"{schema_name}.#{table_name}" if schema_name else f"#{table_name}"
 
-        with self.connection.begin():
+        with connection.begin():
             droptable = f"DROP TABLE IF EXISTS {tmp_full_table_name}"
-            self.connection.exec_driver_sql(droptable)
+            connection.exec_driver_sql(droptable)
 
             ddl = f"""
                 SELECT TOP 0 *
@@ -228,11 +239,7 @@ class mssqlConnector(SQLConnector):
                 FROM {full_table_name}
             """  # noqa: S608
 
-            self.connection.exec_driver_sql(ddl)
-
-    @cached_property
-    def connection(self):
-        return self._engine.connect().execution_options(stream_results=True)
+            connection.exec_driver_sql(ddl)
 
     def get_column_add_ddl(self, table_name, column_name, column_type):
         column = sqlalchemy.Column(column_name, column_type)
