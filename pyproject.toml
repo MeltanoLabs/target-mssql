@@ -76,6 +76,7 @@ select = [
     "B",
     "TRY",
     "EM",
+    "TC",
 ]
 
 [tool.ruff.lint.mccabe]
