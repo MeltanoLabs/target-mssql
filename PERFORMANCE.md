@@ -43,36 +43,61 @@ and works correctly with both pymssql (`%s`) and pyodbc (`?`) parameter styles.
 Fixed startup + first-batch overhead is ~1.3s. At steady state each 10,000-record batch
 takes ~2s through the temp-table + MERGE path.
 
-## Batch timing breakdown (10k records, upsert path)
+## Batch timing breakdown (10k records, upsert path, after tempdb bypass)
 
 | Step | Time | % |
 |------|------|---|
-| dedupe in memory | 0.12s | 6% |
-| `prepare_table` (DDL check) | 0.10s | 5% |
-| `create_temp_table` (DROP+SELECT INTO) | 0.02s | 1% |
-| **`bulk_insert` into `#temp`** | **1.55s** | **83%** |
-| `MERGE INTO` main table | 0.07s | 4% |
+| dedupe in memory | 0.12s | ~7% |
+| `prepare_table` (DDL check) | 0.10s | ~6% |
+| **`merge_upsert_records` (chunked MERGE)** | **~1.5s** | **~87%** |
 
-## Key finding
+## Key findings
 
-The bottleneck is **SQL Server's INSERT throughput into tempdb** (~6,000–7,000 rows/sec).
-Confirmed by trying: multi-row INSERTs (same speed), `WITH (TABLOCK)` (marginal),
-`SET NOCOUNT ON` (no effect), inline-VALUES MERGE (slower — 2.1s vs 1.7s), and measuring
-the no-primary-key path (same ~1.7s for 10k rows directly into the main table).
-The wall is SQL Server I/O in Docker, not Python or network overhead.
+### Local Docker (pymssql/pyodbc)
+
+The bottleneck is **SQL Server's MERGE throughput into the main table** (~6,000–7,000 rows/sec).
+The wall is SQL Server I/O, not Python or network overhead.
+
+### Azure SQL staging (the SIT timeout investigation)
+
+Root cause: **tempdb page-latch contention**. Azure SQL's tempdb is a shared resource
+across all tenants. Two parallel streams both inserting into tempdb simultaneously compete
+for the same PFS/GAM/SGAM allocation pages — which are shared server-wide, not per-session.
+On a low-tier staging SKU this caused ~1 rec/sec throughput (439 records took 431 seconds).
+
+The production environment (higher-tier Azure SQL) was not affected: 438 records in ~32s.
+
+**Fix:** replace the temp-table upsert path (`create_temp → INSERT → MERGE`)
+with `merge_upsert_records`, which uses chunked `MERGE … USING (VALUES …) AS source(…)`
+directly into the target table. This bypasses tempdb entirely.
 
 ## What was changed
 
-`bulk_insert_records` now uses explicit multi-row `INSERT … VALUES (…),(…),…` statements
-chunked to SQL Server's 2100-parameter limit, with `WITH (TABLOCK)` on temp table inserts.
-This is cleaner than SQLAlchemy `executemany` (which also returned a wrong `rowcount`)
-and enables minimal logging on the heap temp table.
+### `bulk_insert_records`
+Uses explicit multi-row `INSERT … VALUES (…),(…),…` statements chunked to SQL Server's
+2100-parameter limit. No-key-properties (append-only) path only.
+
+Removed: `WITH (TABLOCK)` on temp table inserts. On Azure SQL (FULL recovery model)
+TABLOCK does not enable minimal logging; it only acquires an exclusive table lock.
+On local SQL Server with tempdb (SIMPLE recovery), it was a minor optimisation that is
+now moot since we no longer write to tempdb.
+
+### `merge_upsert_records` (new)
+Used for the key-properties (upsert) path. Generates:
+```sql
+MERGE INTO target AS target
+USING (VALUES (?, ?, …), …) AS source([col1], [col2], …)
+ON (target.[key] = source.[key])
+WHEN MATCHED THEN UPDATE SET …
+WHEN NOT MATCHED BY TARGET THEN INSERT … VALUES …;
+```
+Chunked to the 2100-parameter limit. All chunks share one transaction.
+No temp table, no tempdb I/O, no page-latch contention.
 
 ## Remaining levers to explore
 
-- **Larger `batch_size_rows`** — the 0.1s `prepare_table` + 0.02s temp-table DDL overhead
-  is paid once per batch; fewer bigger batches would amortize it.
-  Set via `{"batch_size_rows": 50000}` in config.
+- **Larger `batch_size_rows`** — the 0.1s `prepare_table` DDL overhead is paid once per
+  batch; fewer bigger batches amortise it. Set via `{"batch_size_rows": 50000}` in config.
 - **Skip `prepare_table` when schema is unchanged** — saves ~0.1s per batch after the first.
-- **SQL Server bulk-copy (BCP)** — would bypass tempdb logging entirely but requires
-  file-system access not available through pymssql.
+- **SQL Server bulk-copy (BCP)** — bypasses logging entirely but requires file-system access
+  not available through pymssql or pyodbc.
