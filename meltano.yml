@@ -18,7 +18,7 @@ plugins:
   loaders:
   - name: target-mssql
     namespace: target_mssql
-    pip_url: -e .
+    pip_url: -e .[pyodbc]
     capabilities:
     - about
     - schema-flattening
@@ -34,7 +34,7 @@ plugins:
       label: Username
       description: SQL Server username
     - name: password
-      kind: password
+      kind: string
       label: Password
       description: SQL Server password
       sensitive: true
@@ -66,15 +66,16 @@ plugins:
       description: Use float data type for numbers (otherwise number type is used)
     - name: driver
       kind: string
-      value: pymssql
+      value: pyodbc
       label: Driver
       description: The driver to use for the database connection (pymssql or pyodbc)
     - name: odbc_driver
       kind: string
       label: ODBC Driver
       description: The ODBC driver to use when driver=pyodbc (e.g. 'ODBC Driver 18 for SQL Server')
+      value: ODBC Driver 18 for SQL Server
     - name: trust_server_certificate
       kind: boolean
-      value: false
+      value: true
       label: Trust Server Certificate
       description: Trust the server certificate without validation (useful for self-signed certs)
