@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
 
 
-_MAX_PARAM_LIMIT = 2100  # SQL Server rejects exactly 2100 parameters; keep strictly under.
+_MAX_PARAM_LIMIT = 2099  # SQL Server rejects exactly 2100 parameters; keep strictly under.
 
 
 class mssqlSink(SQLSink):
