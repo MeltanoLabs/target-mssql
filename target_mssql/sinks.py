@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
 
 
+_MAX_PARAM_LIMIT = 2099  # SQL Server rejects exactly 2100 parameters; keep strictly under.
+
+
 class mssqlSink(SQLSink):
     """mssql target sink class."""
 
@@ -125,8 +128,7 @@ class mssqlSink(SQLSink):
         param_marker = "?" if getattr(dialect.dbapi, "paramstyle", None) == "qmark" else "%s"
         row_placeholder = "(" + ", ".join([param_marker] * len(col_names)) + ")"
 
-        # SQL Server hard limit: 2100 parameters per statement.
-        rows_per_stmt = max(1, 2100 // len(col_names))
+        rows_per_stmt = max(1, _MAX_PARAM_LIMIT // len(col_names))
 
         total = 0
         with connection.begin():
@@ -233,7 +235,7 @@ class mssqlSink(SQLSink):
 
         param_marker = "?" if getattr(dialect.dbapi, "paramstyle", None) == "qmark" else "%s"
         row_placeholder = "(" + ", ".join([param_marker] * len(col_names)) + ")"
-        rows_per_stmt = max(1, 2100 // len(col_names))
+        rows_per_stmt = max(1, _MAX_PARAM_LIMIT // len(col_names))
 
         join_condition = " AND ".join(f"target.{quoted[k]} = source.{quoted[k]}" for k in join_keys)
         update_cols = [c for c in col_names if c not in join_keys]

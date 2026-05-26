@@ -2,6 +2,7 @@
 
 # flake8: noqa
 import io
+import json
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -264,3 +265,52 @@ def test_insert_merge(mssql_target):
 
     file_name = "insert_merge_part2.singer"
     singer_file_to_target(file_name, mssql_target)
+
+
+@pytest.fixture()
+def mssql_pyodbc_config():
+    return {
+        "schema": "dbo",
+        "username": "sa",
+        "password": "P@55w0rd",
+        "host": "localhost",
+        "port": "1433",
+        "database": "master",
+        "driver": "pyodbc",
+        "odbc_driver": "ODBC Driver 18 for SQL Server",
+        "trust_server_certificate": True,
+    }
+
+
+def test_param_limit(mssql_pyodbc_config):
+    """pyodbc sends true ODBC bound parameters, so SQL Server's 2100-parameter limit
+    applies. With 14 columns the old formula (2100 // 14 = 150) produced exactly 2100
+    params per chunk, which SQL Server rejects. 151 records triggers that first chunk."""
+    pytest.importorskip("pyodbc")
+
+    n_cols = 13  # plus 'id' = 14 total
+    n_records = 151  # one more than the old chunk size of 150
+
+    schema = {
+        "type": "SCHEMA",
+        "stream": "param_limit_test",
+        "schema": {
+            "properties": {
+                "id": {"type": "integer"},
+                **{f"col{i}": {"type": "integer"} for i in range(n_cols)},
+            }
+        },
+        "key_properties": ["id"],
+    }
+    records = [
+        {
+            "type": "RECORD",
+            "stream": "param_limit_test",
+            "record": {"id": i, **{f"col{j}": i * j for j in range(n_cols)}},
+        }
+        for i in range(n_records)
+    ]
+
+    target = Targetmssql(config=mssql_pyodbc_config)
+    buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, *records]))
+    target.listen(buf)
