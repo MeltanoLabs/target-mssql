@@ -77,9 +77,15 @@ jobs:
       uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       with:
         python-version: '${{ matrix.python-version }}'
+    - name: Install ODBC driver
+      run: |
+        curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+        curl -fsSL https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
+        sudo apt-get update
+        sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
     - name: Install dependencies
       run: |
-        uv sync
+        uv sync --extra pyodbc
     - name: Test with pytest
       env:
         PYTHON_VERSION: ${{ matrix.python-version }}
