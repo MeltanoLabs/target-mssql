@@ -62,7 +62,7 @@ jobs:
         ports:
           - 1433:1433
     strategy:
-      max-parallel: 3
+      max-parallel: 6
       matrix:
         python-version: ${{ fromJson(needs.build-package.outputs.supported-python-versions) }}
         mssql-image:
