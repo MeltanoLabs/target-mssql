@@ -153,6 +153,12 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
             )
         return columns
 
+    @property
+    def staging_full_table_name(self) -> str:
+        """Permanent staging table for the upsert path (same schema, prefixed _staging_)."""
+        staging = f"_staging_{self.table_name}"
+        return f"{self.schema_name}.{staging}" if self.schema_name else staging
+
     def process_batch(self, context: dict) -> None:
         """Process a batch with the given batch context.
         Writes a batch to the SQL target. Developers may override this method
@@ -178,12 +184,29 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                     primary_keys=join_keys,
                     as_temp_table=False,
                 )
+
+                staging = self.staging_full_table_name
+                self.connector.prepare_table(
+                    full_table_name=staging,
+                    schema=schema,
+                    primary_keys=[],
+                    as_temp_table=False,
+                )
+                with connection.begin():
+                    connection.exec_driver_sql(f"TRUNCATE TABLE {staging}")  # noqa: S608
+
                 self.logger.info(f"Upserting {len(deduped_records)} records into {self.full_table_name}")
-                self.merge_upsert_records(
+                self.bulk_insert_records(
                     connection=connection,
-                    full_table_name=self.full_table_name,
+                    full_table_name=staging,
                     schema=schema,
                     records=deduped_records,
+                )
+                self.merge_upsert_from_table(
+                    connection=connection,
+                    from_table_name=staging,
+                    to_table_name=self.full_table_name,
+                    schema=schema,
                     join_keys=join_keys,
                 )
 
@@ -292,13 +315,12 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
             ]
         )  # noqa
 
+        matched_clause = f"WHEN MATCHED THEN UPDATE SET {update_stmt}" if update_stmt else ""
         merge_sql = f"""
             MERGE INTO {to_table_name} AS target
             USING {from_table_name} AS temp
             ON {join_condition}
-            WHEN MATCHED THEN
-                UPDATE SET
-                    {update_stmt}
+            {matched_clause}
             WHEN NOT MATCHED THEN
                 INSERT ({", ".join(quoted_keys.values())})
                 VALUES ({", ".join([f"temp.{quoted_key}" for quoted_key in quoted_keys.values()])});
