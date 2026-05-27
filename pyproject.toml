@@ -27,7 +27,7 @@ dependencies = [
 pyodbc = ["pyodbc>=5.3.0,<6"]
 
 [project.scripts]
-target-mssql = "target_mssql.target:Targetmssql.cli"
+target-mssql = "target_mssql.target:TargetMSSQL.cli"
 
 [dependency-groups]
 dev = [{ include-group = "lint" }, "mypy>=2.1.0"]
@@ -36,6 +36,9 @@ test = ["pytest>=9.0.3"]
 
 [tool.uv]
 default-groups = "all"
+
+[tool.uv.sources]
+singer-sdk = { git = "https://github.com/meltano/sdk.git", rev = "main" }
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -49,7 +52,7 @@ source = "vcs"
 addopts = ["-ra"]
 filterwarnings = [
     "error",
-    "once:Python .* will reach its end of life:singer_sdk.helpers._compat.SingerSDKPythonEOLWarning",
+    "once:Python .* will reach its end of life:FutureWarning",
 ]
 log_level = "INFO"
 minversion = "9"

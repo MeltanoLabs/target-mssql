@@ -1,20 +1,26 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+import sys
+from typing import TYPE_CHECKING, cast
 
 import sqlalchemy
 from singer_sdk.helpers._typing import get_datelike_property_type
 from singer_sdk.sql import SQLConnector
 from sqlalchemy.dialects import mssql
 
+if sys.version_info >= (3, 12):
+    from typing import override
+else:
+    from typing_extensions import override
+
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Sequence
 
     from singer_sdk.sql.connector import FullyQualifiedName
     from sqlalchemy.engine import Connection
 
 
-class mssqlConnector(SQLConnector):
+class MSSQLConnector(SQLConnector):
     """The connector for mssql.
 
     This class handles all DDL and type conversions.
@@ -26,79 +32,18 @@ class mssqlConnector(SQLConnector):
     allow_merge_upsert: bool = True  # Whether MERGE UPSERT is supported.
     allow_temp_tables: bool = True  # Whether temp tables are supported.
 
-    def create_schema(self, schema_name):
+    @override
+    def create_schema(self, schema_name: str):
         with self._connect() as conn, conn.begin():
             conn.exec_driver_sql(f"CREATE SCHEMA {schema_name}")
 
-    def create_table_with_records(
-        self,
-        full_table_name: str | None,
-        schema: dict,
-        records: Iterable[dict[str, Any]],
-        primary_keys: list[str] | None = None,
-        partition_keys: list[str] | None = None,
-        as_temp_table: bool = False,
-    ) -> None:
-        """Create an empty table.
-        Args:
-            full_table_name: the target table name.
-            schema: the JSON schema for the new table.
-            records: records to load.
-            primary_keys: list of key properties.
-            partition_keys: list of partition keys.
-            as_temp_table: True to create a temp table.
-        """
-        full_table_name = full_table_name or self.full_table_name
-        if primary_keys is None:
-            primary_keys = self.key_properties
-        partition_keys = partition_keys or None
-
-        self.connector.prepare_table(
-            full_table_name=full_table_name,
-            primary_keys=primary_keys,
-            schema=schema,
-            as_temp_table=as_temp_table,
-        )
-        self.bulk_insert_records(full_table_name=full_table_name, schema=schema, records=records)
-
-    def get_sqlalchemy_url(self, config: dict) -> str:
-        """Generates a SQLAlchemy URL for mssql.
-
-        Args:
-            config: The configuration for the connector.
-        """
-
-        if config.get("sqlalchemy_url"):
-            return config["sqlalchemy_url"]
-
-        driver = config["driver"]
-
-        query = {}
-        if driver == "pyodbc":
-            odbc_driver = config.get("odbc_driver", "ODBC Driver 17 for SQL Server")
-            query["driver"] = odbc_driver
-            if config.get("trust_server_certificate"):
-                query["TrustServerCertificate"] = "yes"
-
-        self.logger.info("Using MSSQL SQLAlchemy '%s' driver", driver)
-
-        connection_url = sqlalchemy.engine.url.URL.create(
-            drivername=f"mssql+{driver}",
-            username=config["username"],
-            password=config["password"],
-            host=config["host"],
-            port=config["port"],
-            database=config["database"],
-            query=query,
-        )
-        return connection_url.render_as_string(hide_password=False)
-
+    @override
     def create_empty_table(
         self,
-        full_table_name: str,
+        full_table_name: str | FullyQualifiedName,
         schema: dict,
-        primary_keys: list[str] | None = None,
-        partition_keys: list[str] | None = None,
+        primary_keys: Sequence[str] | None = None,
+        partition_keys: Sequence[str] | None = None,
         as_temp_table: bool = False,
     ) -> None:
         """Create an empty target table.

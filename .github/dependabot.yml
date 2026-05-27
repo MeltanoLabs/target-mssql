@@ -10,6 +10,8 @@ updates:
       github-actions:
         patterns:
           - "*"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "pre-commit"
     directory: "/"
@@ -21,6 +23,8 @@ updates:
       pre-commit:
         patterns:
           - "*"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "pip"
     directory: "/"
@@ -38,3 +42,5 @@ updates:
         dependency-type: "development"
         patterns:
           - "*"
+    cooldown:
+      default-days: 7

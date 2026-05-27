@@ -79,3 +79,8 @@ plugins:
       value: true
       label: Trust Server Certificate
       description: Trust the server certificate without validation (useful for self-signed certs)
+    - name: validate_records
+      kind: boolean
+      label: Validate Records
+      description: Whether to validate the schema of the incoming streams
+      value: false

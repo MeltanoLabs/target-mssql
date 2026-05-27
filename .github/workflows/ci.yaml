@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       mssql:
-        image: mcr.microsoft.com/mssql/server:${{ matrix.mssql-image }}
+        image: mcr.microsoft.com/mssql/server:${{ matrix.mssql-image }}  # zizmor: ignore[unpinned-images]
         env:
           SA_PASSWORD: P@55w0rd
           ACCEPT_EULA: "Y"
@@ -66,9 +66,9 @@ jobs:
       matrix:
         python-version: ${{ fromJson(needs.build-package.outputs.supported-python-versions) }}
         mssql-image:
-        - 2019-latest@sha256:5b89fce40832a459ad4d634e9d588ae1e4496e664d9a4a9f8baeed6949b53fef
-        - 2022-latest@sha256:d01cc45e6b920eff17abc60295b8748821e09b678f0fcf54959ef37406b80203
-        - 2025-latest@sha256:320daf857745ef0092c6e53e82d0bf81ed6bca2794e6ccbffb72cf6a8d14a441
+        - 2019-latest
+        - 2022-latest
+        - 2025-latest
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
@@ -76,16 +76,14 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       with:
-        python-version: '${{ matrix.python-version }}'
+        cache-suffix: ${{ matrix.mssql-image }}
+        python-version: ${{ matrix.python-version }}
     - name: Install ODBC driver
       run: |
         curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor | sudo tee /usr/share/keyrings/microsoft-prod.gpg > /dev/null
         curl -fsSL https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
         sudo apt-get update
         sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
-    - name: Install dependencies
-      run: |
-        uv sync --extra pyodbc
     - name: Test with pytest
       env:
         PYTHON_VERSION: ${{ matrix.python-version }}
