@@ -6,6 +6,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 import sqlalchemy.engine.url
+from singer_sdk import Sink
 from singer_sdk import typing as th
 from singer_sdk.sql import SQLTarget
 
@@ -135,6 +136,71 @@ class TargetMSSQL(SQLTarget):
         return self._url
 
     @override
+    def add_sink(  # ty:ignore[override-of-final-method]
+        self,
+        stream_name: str,
+        schema: dict,
+        key_properties: Sequence[str] | None = None,
+    ) -> Sink:
+        """Create a sink and register it.
+
+        This method is internal to the SDK and should not need to be overridden.
+
+        Args:
+            stream_name: Name of the stream.
+            schema: Schema of the stream.
+            key_properties: Primary key of the stream.
+
+        Returns:
+            A new sink for the stream.
+        """
+        self.logger.debug("Initializing target sink '%s'...", self.name)
+        sink = self.create_sink(
+            stream_name=stream_name,
+            schema=schema,
+            key_properties=key_properties,
+        )
+
+        try:
+            sink.setup()
+        except Exception:  # pragma: no cover
+            self.logger.error("Error initializing target sink '%s'", self.name)  # noqa: TRY400
+            raise
+
+        self._sinks_active[stream_name] = sink
+        return sink
+
+    @override
+    def add_sqlsink(  # ty:ignore[override-of-final-method]
+        self,
+        stream_name: str,
+        schema: dict,
+        key_properties: Sequence[str] | None = None,
+    ) -> Sink:
+        """Create a sink and register it.
+
+        This method is internal to the SDK and should not need to be overridden.
+
+        Args:
+            stream_name: Name of the stream.
+            schema: Schema of the stream.
+            key_properties: Primary key of the stream.
+
+        Returns:
+            A new sink for the stream.
+        """
+        self.logger.debug("Initializing target sink '%s'...", self.name)
+        sink = self.create_sink(
+            stream_name=stream_name,
+            schema=schema,
+            key_properties=key_properties,
+        )
+        sink.setup()
+        self._sinks_active[stream_name] = sink
+
+        return sink
+
+    # @override
     def create_sink(
         self,
         *,

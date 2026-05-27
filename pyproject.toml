@@ -37,8 +37,8 @@ test = ["pytest>=9.0.3"]
 [tool.uv]
 default-groups = "all"
 
-[tool.uv.sources]
-singer-sdk = { git = "https://github.com/meltano/sdk.git", rev = "main" }
+# [tool.uv.sources]
+# singer-sdk = { git = "https://github.com/meltano/sdk.git", rev = "main" }
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
