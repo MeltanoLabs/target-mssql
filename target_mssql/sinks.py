@@ -34,6 +34,10 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
     connector_class = MSSQLConnector
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._staging_prepared = False
+
     # Copied purely to help with type hints
     @property
     def connector(self) -> MSSQLConnector:
@@ -186,12 +190,14 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                 )
 
                 staging = self.staging_full_table_name
-                self.connector.prepare_table(
-                    full_table_name=staging,
-                    schema=schema,
-                    primary_keys=[],
-                    as_temp_table=False,
-                )
+                if not self._staging_prepared:
+                    self.connector.prepare_table(
+                        full_table_name=staging,
+                        schema=schema,
+                        primary_keys=[],
+                        as_temp_table=False,
+                    )
+                    self._staging_prepared = True
                 with connection.begin():
                     connection.exec_driver_sql(f"TRUNCATE TABLE {staging}")  # noqa: S608
 
