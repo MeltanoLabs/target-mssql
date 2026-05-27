@@ -21,29 +21,51 @@ uv run python target_mssql/tests/generate_benchmark_data.py 100000 \
 
 ## Benchmarks (local Docker MSSQL 2022, upsert path, 8-column schema)
 
-| SDK | Driver | `bulk_insert_records` | 10k batch time | 100k wall time | Throughput |
-|-----|--------|-----------------------|----------------|----------------|------------|
-| 0.48.1 | pymssql | executemany (original) | 1.97s | 23.4s | ~4,270 rec/s |
-| 0.48.1 | pymssql | multi-row INSERT + TABLOCK | 1.87s | 23.3s | ~4,290 rec/s |
-| 0.53.7 | pymssql | multi-row INSERT + TABLOCK | 2.17s | 21.2s | ~4,720 rec/s |
-| 0.53.7 | **pyodbc** | multi-row INSERT + TABLOCK | **1.48s** | **9.8s** | **~10,240 rec/s** |
-| 0.54.0 | pymssql | multi-row INSERT + TABLOCK | — | 22.0s | ~4,550 rec/s |
-| 0.54.0 | pyodbc | multi-row INSERT + TABLOCK | — | 9.5s | ~10,530 rec/s |
+### Upsert path: temp table + MERGE (old, pre-#15)
 
-pyodbc (ODBC Driver 18 for SQL Server) is **2.2× faster** than pymssql for this workload.
+| SDK | Driver | Upsert method | 10k batch time | 100k wall time | Throughput |
+|-----|--------|---------------|----------------|----------------|------------|
+| 0.48.1 | pymssql | executemany (original) | 1.97s | 23.4s | ~4,270 rec/s |
+| 0.48.1 | pymssql | multi-row INSERT #temp + MERGE | 1.87s | 23.3s | ~4,290 rec/s |
+| 0.53.7 | pymssql | multi-row INSERT #temp + MERGE | 2.17s | 21.2s | ~4,720 rec/s |
+| 0.53.7 | **pyodbc** | multi-row INSERT #temp + MERGE | **1.48s** | **9.8s** | **~10,240 rec/s** |
+| 0.54.0 | pymssql | multi-row INSERT #temp + MERGE | — | 22.0s | ~4,550 rec/s |
+| 0.54.0 | pyodbc | multi-row INSERT #temp + MERGE | — | 9.5s | ~10,530 rec/s |
+
+These rows used `INSERT INTO #temp … WITH (TABLOCK)` + single `MERGE #temp → target`.
+TABLOCK enables minimal logging on local SQL Server (SIMPLE recovery), making #temp inserts
+fast. This path was abandoned in #15 because Azure SQL's shared tempdb causes page-latch
+contention under parallel streams.
+
+### Upsert path: chunked MERGE VALUES (current, post-#15)
+
+| SDK | Driver | Upsert method | 100k wall time | Throughput |
+|-----|--------|---------------|----------------|------------|
+| 0.54.2 | pymssql | chunked MERGE … USING (VALUES …) | 37.7s | ~2,650 rec/s |
+| 0.54.2 | **pyodbc** | chunked MERGE … USING (VALUES …) | **17.6s** | **~5,680 rec/s** |
+| 0.54.2 | pymssql | staging table (INSERT heap → MERGE) | 30.3s | ~3,300 rec/s |
+| 0.54.2 | **pyodbc** | staging table (INSERT heap → MERGE) | **14.3s** | **~7,000 rec/s** |
+
+pyodbc (ODBC Driver 18 for SQL Server) is **~2× faster** than pymssql for this workload.
 The ODBC Driver 18 has a more efficient TDS implementation than pymssql/FreeTDS, particularly
 for parameterised multi-row inserts.
 
-SDK 0.54.0 shows no significant change vs 0.53.7 (within measurement noise).
-SDK 0.53.x delivered ~10% throughput improvement over 0.48.1 with pymssql.
-Our `bulk_insert_records` rewrite did not change raw throughput (the bottleneck is SQL
-Server tempdb I/O), but it correctly reports row counts, uses TABLOCK for minimal logging,
-and works correctly with both pymssql (`%s`) and pyodbc (`?`) parameter styles.
+The chunked MERGE VALUES path is ~40–45% slower than the old temp-table path locally.
+This is expected: TABLOCK + minimal logging on #temp is inherently faster than direct
+MERGE into a fully-logged target table. The trade-off is deliberate — no tempdb contention
+on Azure SQL.
+
+**Staging table approach** is **~19–20% faster** than direct chunked MERGE VALUES locally
+(same SDK). It trades N chunked MERGE statements for N simpler INSERT chunks + 1 efficient
+table-to-table MERGE, which reduces per-statement work even though statement count is similar.
+On a high-latency connection (Azure SQL) the single expensive MERGE may offer a larger
+advantage. The permanent staging table (not `#temp`) avoids the tempdb page-latch contention
+that originally motivated the switch to direct MERGE VALUES.
 
 Fixed startup + first-batch overhead is ~1.3s. At steady state each 10,000-record batch
 takes ~2s through the temp-table + MERGE path.
 
-## Batch timing breakdown (10k records, upsert path, after tempdb bypass)
+## Batch timing breakdown (10k records, upsert path, chunked MERGE VALUES)
 
 | Step | Time | % |
 |------|------|---|

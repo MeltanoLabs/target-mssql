@@ -12,6 +12,7 @@ plugins:
     variant: meltano
     pip_url: git+https://github.com/meltano/tap-smoke-test.git
     config:
+      emit_activate_version_messages: true
       streams:
       - stream_name: animals
         input_filename: https://raw.githubusercontent.com/meltano/tap-smoke-test/refs/heads/main/demo-data/animals-data.jsonl
