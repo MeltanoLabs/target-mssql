@@ -215,26 +215,13 @@ class MSSQLConnector(SQLConnector):
         # from pymssql.
         # Strip collation: MSSQL rejects quoted collation names (e.g. COLLATE "...").
         self.remove_collation(column_type)
-        # SQL Server raises error 5074 if a DEFAULT constraint is bound to the column.
-        # Drop it first so the ALTER succeeds; we don't need to recreate it.
-        table_name_str = f"{table_name}".replace("'", "''")
-        col_name_str = column_name.replace("'", "''")
         return sqlalchemy.DDL(
             """
-            DECLARE @cn NVARCHAR(256)
-            SELECT @cn = dc.name
-            FROM sys.default_constraints dc
-            JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
-            WHERE dc.parent_object_id = OBJECT_ID(N'%(table_name_str)s') AND c.name = N'%(col_name_str)s'
-            IF @cn IS NOT NULL
-                EXEC('ALTER TABLE %(table_name)s DROP CONSTRAINT [' + @cn + ']')
             ALTER TABLE %(table_name)s ALTER COLUMN %(column_name)s %(column_type)s
             SELECT 1 AS ok
             """,
             {
                 "table_name": table_name,
-                "table_name_str": table_name_str,
-                "col_name_str": col_name_str,
                 "column_name": self._dialect.identifier_preparer.quote(column_name),
                 "column_type": column_type,
             },
