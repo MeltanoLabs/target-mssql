@@ -4,19 +4,24 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from typing import TYPE_CHECKING, Any
 
 from singer_sdk import metrics
 from singer_sdk.helpers._conformers import replace_leading_digit
-from singer_sdk.sql import SQLConnector, SQLSink
+from singer_sdk.sql import SQLSink
 from sqlalchemy import Column
 
-from target_mssql.connector import mssqlConnector
+from target_mssql.connector import MSSQLConnector
+
+if sys.version_info >= (3, 12):
+    from typing import override
+else:
+    from typing_extensions import override
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from singer_sdk.plugin_base import PluginBase
     from singer_sdk.sql.connector import FullyQualifiedName
     from sqlalchemy.engine import Connection
 
@@ -24,26 +29,14 @@ if TYPE_CHECKING:
 _MAX_PARAM_LIMIT = 2099  # SQL Server rejects exactly 2100 parameters; keep strictly under.
 
 
-class mssqlSink(SQLSink):
+class MSSQLSink(SQLSink[MSSQLConnector]):
     """mssql target sink class."""
 
-    connector_class = mssqlConnector
-
-    def __init__(
-        self,
-        target: PluginBase,
-        stream_name: str,
-        schema: dict,
-        key_properties: list[str] | None,
-        connector: SQLConnector | None = None,
-    ) -> None:
-        super().__init__(target, stream_name, schema, key_properties)
-        if self._config.get("table_prefix"):
-            self.stream_name = self._config.get("table_prefix") + stream_name
+    connector_class = MSSQLConnector
 
     # Copied purely to help with type hints
     @property
-    def connector(self) -> mssqlConnector:
+    def connector(self) -> MSSQLConnector:
         """The connector object.
         Returns:
             The connector object.
@@ -77,6 +70,7 @@ class mssqlSink(SQLSink):
         # Schema name not detected.
         return None
 
+    @override
     def preprocess_record(self, record: dict, context: dict) -> dict:
         """Process incoming record and return a modified result.
         Args:

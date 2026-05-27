@@ -11,6 +11,8 @@ envlist = [
 
 [env_run_base]
 description = "run tests on Python {py_dot_ver}"
+runner = "uv-venv-runner"
+package = "uv"
 dependency_groups = [
     "test"
 ]

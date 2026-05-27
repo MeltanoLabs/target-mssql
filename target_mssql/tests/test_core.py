@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from singer_sdk.testing import sync_end_to_end
 
-from target_mssql.target import Targetmssql
+from target_mssql.target import TargetMSSQL
 from target_mssql.tests.samples.aapl.aapl import Fundamentals
 from target_mssql.tests.samples.sample_tap_countries.countries_tap import (
     SampleTapCountries,
@@ -44,13 +44,13 @@ def mssql_dualconfig():
 
 
 @pytest.fixture
-def mssql_target(mssql_config) -> Targetmssql:
-    return Targetmssql(config=mssql_config)
+def mssql_target(mssql_config) -> TargetMSSQL:
+    return TargetMSSQL(config=mssql_config)
 
 
 @pytest.fixture
-def mssql_dualtarget(mssql_dualconfig) -> Targetmssql:
-    return Targetmssql(config=mssql_dualconfig)
+def mssql_dualtarget(mssql_dualconfig) -> TargetMSSQL:
+    return TargetMSSQL(config=mssql_dualconfig)
 
 
 def singer_file_to_target(file_name, target) -> None:
@@ -78,14 +78,14 @@ def singer_file_to_target(file_name, target) -> None:
 @pytest.mark.skip(reason="TODO: Something with identity, doesn't make sense. external API, skipping")
 def test_countries_to_mssql(mssql_config):
     tap = SampleTapCountries(config={}, state=None)
-    target = Targetmssql(config=mssql_config)
+    target = TargetMSSQL(config=mssql_config)
     sync_end_to_end(tap, target)
 
 
 # @pytest.mark.skip("Can't handle objects yet")
 def test_table(mssql_config):
     tap = Fundamentals(config={}, state=None)
-    target = Targetmssql(config=mssql_config)
+    target = TargetMSSQL(config=mssql_config)
     sync_end_to_end(tap, target)
 
 
@@ -157,7 +157,7 @@ def test_schema_updates(mssql_target):
         "table_prefix": "prfx_",
         "prefer_float_over_numeric": True,
     }
-    mssql_target = Targetmssql(config=base_config)
+    mssql_target = TargetMSSQL(config=base_config)
     file_name = "schema_updates.singer"
     singer_file_to_target(file_name, mssql_target)
 
@@ -311,6 +311,6 @@ def test_param_limit(mssql_pyodbc_config):
         for i in range(n_records)
     ]
 
-    target = Targetmssql(config=mssql_pyodbc_config)
+    target = TargetMSSQL(config=mssql_pyodbc_config)
     buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, *records]))
     target.listen(buf)
