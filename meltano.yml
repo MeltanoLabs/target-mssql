@@ -13,7 +13,7 @@ plugins:
     pip_url: git+https://github.com/meltano/tap-smoke-test.git
     config:
       streams:
-      - stream_name: animale
+      - stream_name: animals
         input_filename: https://raw.githubusercontent.com/meltano/tap-smoke-test/refs/heads/main/demo-data/animals-data.jsonl
   loaders:
   - name: target-mssql
