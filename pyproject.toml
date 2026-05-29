@@ -52,7 +52,6 @@ source = "vcs"
 addopts = ["-ra"]
 filterwarnings = [
     "error",
-    "once:Python .* will reach its end of life:FutureWarning",
 ]
 log_level = "INFO"
 minversion = "9"
