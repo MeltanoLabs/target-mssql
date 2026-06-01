@@ -27,6 +27,8 @@ uv tool install git+https://github.com/storebrand/target-mssql.git@main
 ## Accepted Config Options
 Regarding connection info, either the `sqlalchemy_url` or `username`, `password`, `host`, and `database` needs to be specified. If the `sqlalchemy_url` is set, the other connection parameters are ignored.
 
+See [AZURE_BLOB_STAGE.md](AZURE_BLOB_STAGE.md) for instructions on using Azure Blob Storage as a high-performance bulk-load stage.
+
 ## Capabilities
 
 * `about`

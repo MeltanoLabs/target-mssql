@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import sqlalchemy
 from singer_sdk.helpers._typing import get_datelike_property_type
@@ -226,3 +226,178 @@ class MSSQLConnector(SQLConnector):
                 "column_type": column_type,
             },
         )
+
+    # -------------------------------------------------------------------------
+    # Azure Blob Storage stage
+    # -------------------------------------------------------------------------
+
+    _CREDENTIAL_NAME = "target_mssql_credential"
+    _DATA_SOURCE_NAME = "target_mssql_stage"
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._stage_prepared = False
+
+    def ensure_azure_stage(
+        self,
+        account_name: str,
+        container: str,
+        sas_token: str,
+        skip_credential_setup: bool = False,
+    ) -> None:
+        """Idempotently create the DATABASE SCOPED CREDENTIAL and EXTERNAL DATA SOURCE.
+
+        Both objects are created once per connector instance; subsequent calls are
+        no-ops.  The credential SECRET is updated on every call so that SAS token
+        rotation takes effect without manual intervention.
+
+        Set *skip_credential_setup* to True when the database user lacks
+        ALTER ANY DATABASE SCOPED CREDENTIAL permission.  The credential and
+        external data source must already exist in that case.
+        """
+        if self._stage_prepared:
+            return
+
+        location = f"https://{account_name}.blob.core.windows.net/{container}"
+        cred = self._CREDENTIAL_NAME
+        ds = self._DATA_SOURCE_NAME
+
+        with self._connect() as conn:
+            if not skip_credential_setup:
+                # Escape single quotes in config values used in DDL strings.
+                safe_token = sas_token.lstrip("?").replace("'", "''")
+                # CREATE or ALTER the scoped credential so token rotation is handled.
+                with conn.begin():
+                    try:
+                        conn.exec_driver_sql(
+                            f"IF NOT EXISTS ("  # noqa: S608
+                            f"  SELECT 1 FROM sys.database_scoped_credentials WHERE name = N'{cred}'"
+                            f") CREATE DATABASE SCOPED CREDENTIAL [{cred}]"
+                            f"  WITH IDENTITY = N'SHARED ACCESS SIGNATURE', SECRET = N'{safe_token}'"
+                            f" ELSE ALTER DATABASE SCOPED CREDENTIAL [{cred}]"
+                            f"  WITH IDENTITY = N'SHARED ACCESS SIGNATURE', SECRET = N'{safe_token}'"
+                        )
+                    except Exception as e:
+                        redacted = str(e).replace(safe_token, "[REDACTED]")
+                        msg = f"Failed to create/alter DATABASE SCOPED CREDENTIAL: {redacted}"
+                        raise RuntimeError(msg) from None
+
+            # Create the EXTERNAL DATA SOURCE if not already present.
+            with conn.begin():
+                conn.exec_driver_sql(
+                    f"IF NOT EXISTS ("  # noqa: S608
+                    f"  SELECT 1 FROM sys.external_data_sources WHERE name = N'{ds}'"
+                    f") CREATE EXTERNAL DATA SOURCE [{ds}]"
+                    f"  WITH (TYPE = BLOB_STORAGE,"
+                    f"        LOCATION = N'{location}',"
+                    f"        CREDENTIAL = [{cred}])"
+                )
+
+        self._stage_prepared = True
+
+    def _openjson_type(self, property_jsonschema: dict) -> str:
+        """Return the SQL type string to use in an OPENJSON WITH clause."""
+        if self._jsonschema_type_check(property_jsonschema, ("string",)):
+            datelike = get_datelike_property_type(property_jsonschema)
+            if datelike == "date-time":
+                return "DATETIMEOFFSET"
+            if datelike == "time":
+                return "TIME"
+            if datelike == "date":
+                return "DATE"
+            maxlength = property_jsonschema.get("maxLength")
+            if maxlength is not None and maxlength <= 4000:
+                return f"NVARCHAR({maxlength})"
+            return "NVARCHAR(MAX)"
+        if self._jsonschema_type_check(property_jsonschema, ("integer",)):
+            return "BIGINT"
+        if self._jsonschema_type_check(property_jsonschema, ("number",)):
+            return "FLOAT" if self.config.get("prefer_float_over_numeric") else "NUMERIC(38, 16)"
+        if self._jsonschema_type_check(property_jsonschema, ("boolean",)):
+            return "BIT"
+        return "NVARCHAR(MAX)"
+
+    def _openjson_with_clause(self, schema: dict) -> str:
+        """Build the WITH (…) column list for OPENJSON."""
+        quote = self._dialect.identifier_preparer.quote
+        return ",\n            ".join(
+            f"{quote(col)} {self._openjson_type(jsonschema)} '$.{col}'"
+            for col, jsonschema in schema["properties"].items()
+        )
+
+    def insert_from_blob(
+        self,
+        connection: Connection,
+        full_table_name: str | FullyQualifiedName,
+        schema: dict,
+        blob_path: str,
+    ) -> None:
+        """INSERT all records from a staged JSON blob into *full_table_name*."""
+        quote = self._dialect.identifier_preparer.quote
+        properties = schema["properties"]
+        col_list = ", ".join(quote(c) for c in properties)
+        with_clause = self._openjson_with_clause(schema)
+        ds = self._DATA_SOURCE_NAME
+
+        sql = (
+            f"INSERT INTO {full_table_name} ({col_list})\n"  # noqa: S608
+            f"SELECT {col_list}\n"
+            f"FROM OPENROWSET(\n"
+            f"    BULK N'{blob_path}',\n"
+            f"    DATA_SOURCE = N'{ds}',\n"
+            f"    SINGLE_CLOB\n"
+            f") AS _blob\n"
+            f"CROSS APPLY OPENJSON(_blob.BulkColumn)\n"
+            f"WITH (\n"
+            f"    {with_clause}\n"
+            f") AS _src"
+        )
+        with connection.begin():
+            connection.exec_driver_sql(sql)
+
+    def merge_upsert_from_blob(
+        self,
+        connection: Connection,
+        full_table_name: str | FullyQualifiedName,
+        schema: dict,
+        blob_path: str,
+        join_keys: list[str],
+    ) -> None:
+        """MERGE records from a staged JSON blob into *full_table_name*."""
+        quote = self._dialect.identifier_preparer.quote
+        properties = schema["properties"]
+        col_names = list(properties.keys())
+        with_clause = self._openjson_with_clause(schema)
+        ds = self._DATA_SOURCE_NAME
+
+        join_condition = " AND ".join(f"_target.{quote(k)} = _src.{quote(k)}" for k in join_keys)
+        update_cols = [c for c in col_names if c not in join_keys]
+        matched_clause = (
+            "WHEN MATCHED THEN UPDATE SET " + ", ".join(f"_target.{quote(c)} = _src.{quote(c)}" for c in update_cols)
+            if update_cols
+            else ""
+        )
+        all_cols = ", ".join(quote(c) for c in col_names)
+        src_cols = ", ".join(f"_src.{quote(c)}" for c in col_names)
+
+        sql = (
+            f"MERGE INTO {full_table_name} AS _target\n"  # noqa: S608
+            f"USING (\n"
+            f"    SELECT *\n"
+            f"    FROM OPENROWSET(\n"
+            f"        BULK N'{blob_path}',\n"
+            f"        DATA_SOURCE = N'{ds}',\n"
+            f"        SINGLE_CLOB\n"
+            f"    ) AS _blob\n"
+            f"    CROSS APPLY OPENJSON(_blob.BulkColumn)\n"
+            f"    WITH (\n"
+            f"        {with_clause}\n"
+            f"    ) AS _src\n"
+            f") AS _src\n"
+            f"ON ({join_condition})\n"
+            f"{matched_clause}\n"
+            f"WHEN NOT MATCHED BY TARGET THEN\n"
+            f"    INSERT ({all_cols}) VALUES ({src_cols});"
+        )
+        with connection.begin():
+            connection.exec_driver_sql(sql)

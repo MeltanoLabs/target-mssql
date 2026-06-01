@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import re
 import sys
+import tempfile
+import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from singer_sdk import metrics
@@ -163,6 +166,68 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         staging = f"_staging_{self.table_name}"
         return f"{self.schema_name}.{staging}" if self.schema_name else staging
 
+    def _process_batch_via_blob(self, context: dict) -> None:
+        """Blob-stage path: serialise → upload → OPENROWSET load → delete blob."""
+        from target_mssql.azure_blob import delete_blob, upload_file
+
+        blob_cfg = self.config["azure_blob_storage"]
+        account_name: str = blob_cfg["account_name"]
+        sas_token: str = blob_cfg["sas_token"]
+        container: str = blob_cfg["container"]
+        path_prefix: str = blob_cfg.get("path_prefix", "target-mssql")
+
+        conformed_records = [self.conform_record(r) for r in context["records"]]
+        join_keys = [self.conform_name(key, "column") for key in self.key_properties]
+        schema = self.conform_schema(self.schema)
+
+        if join_keys:
+            conformed_records = list({frozenset(r[k] for k in join_keys): r for r in conformed_records}.values())
+
+        if not conformed_records:
+            return
+
+        self.connector.prepare_table(
+            full_table_name=self.full_table_name,
+            schema=schema,
+            primary_keys=join_keys,
+            as_temp_table=False,
+        )
+        self.connector.ensure_azure_stage(
+            account_name=account_name,
+            container=container,
+            sas_token=sas_token,
+            skip_credential_setup=blob_cfg.get("skip_credential_setup", False),
+        )
+
+        blob_name = f"{path_prefix}/{uuid.uuid4()}/data.json"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tmp:
+            json.dump(conformed_records, tmp, default=str)
+            tmp_path = tmp.name
+        try:
+            upload_file(account_name, sas_token, container, blob_name, tmp_path)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+        with self.connector._engine.connect() as connection:
+            try:
+                if join_keys:
+                    self.connector.merge_upsert_from_blob(
+                        connection=connection,
+                        full_table_name=self.full_table_name,
+                        schema=schema,
+                        blob_path=blob_name,
+                        join_keys=join_keys,
+                    )
+                else:
+                    self.connector.insert_from_blob(
+                        connection=connection,
+                        full_table_name=self.full_table_name,
+                        schema=schema,
+                        blob_path=blob_name,
+                    )
+            finally:
+                delete_blob(account_name, sas_token, container, blob_name)
+
     def process_batch(self, context: dict) -> None:
         """Process a batch with the given batch context.
         Writes a batch to the SQL target. Developers may override this method
@@ -170,6 +235,10 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         Args:
             context: Stream partition or context dictionary.
         """
+        if self.config.get("azure_blob_storage"):
+            self._process_batch_via_blob(context)
+            return
+
         conformed_records = (self.conform_record(record) for record in context["records"])
 
         join_keys = [self.conform_name(key, "column") for key in self.key_properties]
