@@ -105,12 +105,7 @@ plugins:
       label: Azure Blob Path Prefix
       description: Virtual directory prefix inside the container
       value: target-mssql
-    - name: azure_blob_storage.skip_credential_setup
-      kind: boolean
-      label: Skip Credential Setup
-      description: >-
-        Skip automatic creation/update of the DATABASE SCOPED CREDENTIAL.
-        Set to true when the database user lacks ALTER ANY DATABASE SCOPED
-        CREDENTIAL permission. The credential 'target_mssql_credential' and
-        EXTERNAL DATA SOURCE 'target_mssql_stage' must already exist.
-      value: false
+    - name: azure_blob_storage.credential_name
+      kind: string
+    - name: azure_blob_storage.data_source_name
+      kind: string

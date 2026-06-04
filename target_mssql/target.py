@@ -124,15 +124,14 @@ class TargetMSSQL(SQLTarget):
                     description="Path prefix (virtual directory) inside the container",
                 ),
                 th.Property(
-                    "skip_credential_setup",
-                    th.BooleanType,
-                    default=False,
-                    description=(
-                        "Skip automatic creation/update of the DATABASE SCOPED CREDENTIAL. "
-                        "Set to true when the database user lacks ALTER ANY DATABASE SCOPED "
-                        "CREDENTIAL permission. The credential 'target_mssql_credential' and "
-                        "EXTERNAL DATA SOURCE 'target_mssql_stage' must already exist."
-                    ),
+                    "credential",
+                    th.StringType,
+                    required=True,
+                ),
+                th.Property(
+                    "data_source",
+                    th.StringType,
+                    required=True,
                 ),
             ),
             description=(

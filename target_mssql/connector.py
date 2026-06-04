@@ -238,63 +238,6 @@ class MSSQLConnector(SQLConnector):
         super().__init__(*args, **kwargs)
         self._stage_prepared = False
 
-    def ensure_azure_stage(
-        self,
-        account_name: str,
-        container: str,
-        sas_token: str,
-        skip_credential_setup: bool = False,
-    ) -> None:
-        """Idempotently create the DATABASE SCOPED CREDENTIAL and EXTERNAL DATA SOURCE.
-
-        Both objects are created once per connector instance; subsequent calls are
-        no-ops.  The credential SECRET is updated on every call so that SAS token
-        rotation takes effect without manual intervention.
-
-        Set *skip_credential_setup* to True when the database user lacks
-        ALTER ANY DATABASE SCOPED CREDENTIAL permission.  The credential and
-        external data source must already exist in that case.
-        """
-        if self._stage_prepared:
-            return
-
-        location = f"https://{account_name}.blob.core.windows.net/{container}"
-        cred = self._CREDENTIAL_NAME
-        ds = self._DATA_SOURCE_NAME
-
-        with self._connect() as conn:
-            if not skip_credential_setup:
-                # Escape single quotes in config values used in DDL strings.
-                safe_token = sas_token.lstrip("?").replace("'", "''")
-                # CREATE or ALTER the scoped credential so token rotation is handled.
-                with conn.begin():
-                    try:
-                        conn.exec_driver_sql(
-                            f"IF NOT EXISTS ("  # noqa: S608
-                            f"  SELECT 1 FROM sys.database_scoped_credentials WHERE name = N'{cred}'"
-                            f") CREATE DATABASE SCOPED CREDENTIAL [{cred}]"
-                            f"  WITH IDENTITY = N'SHARED ACCESS SIGNATURE', SECRET = N'{safe_token}'"
-                            f" ELSE ALTER DATABASE SCOPED CREDENTIAL [{cred}]"
-                            f"  WITH IDENTITY = N'SHARED ACCESS SIGNATURE', SECRET = N'{safe_token}'"
-                        )
-                    except Exception as e:
-                        redacted = str(e).replace(safe_token, "[REDACTED]")
-                        msg = f"Failed to create/alter DATABASE SCOPED CREDENTIAL: {redacted}"
-                        raise RuntimeError(msg) from None
-
-            # Create the EXTERNAL DATA SOURCE if not already present.
-            with conn.begin():
-                conn.exec_driver_sql(
-                    f"IF NOT EXISTS ("  # noqa: S608
-                    f"  SELECT 1 FROM sys.external_data_sources WHERE name = N'{ds}'"
-                    f") CREATE EXTERNAL DATA SOURCE [{ds}]"
-                    f"  WITH (TYPE = BLOB_STORAGE,"
-                    f"        LOCATION = N'{location}',"
-                    f"        CREDENTIAL = [{cred}])"
-                )
-
-        self._stage_prepared = True
-
     def _openjson_type(self, property_jsonschema: dict) -> str:
         """Return the SQL type string to use in an OPENJSON WITH clause."""
         if self._jsonschema_type_check(property_jsonschema, ("string",)):

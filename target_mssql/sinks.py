@@ -168,13 +168,12 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
     def _process_batch_via_blob(self, context: dict) -> None:
         """Blob-stage path: serialise → upload → OPENROWSET load → delete blob."""
-        from target_mssql.azure_blob import delete_blob, upload_file
+        from target_mssql.azure_blob import AzureBlobManager
 
-        blob_cfg = self.config["azure_blob_storage"]
-        account_name: str = blob_cfg["account_name"]
-        sas_token: str = blob_cfg["sas_token"]
-        container: str = blob_cfg["container"]
-        path_prefix: str = blob_cfg.get("path_prefix", "target-mssql")
+        blob_dict = self.config["azure_blob_storage"]
+        path_prefix: str = blob_dict.get("path_prefix", "target-mssql")
+        blob_name = f"{path_prefix}/{uuid.uuid4()}/data.json"
+        manager = AzureBlobManager.from_config(config=blob_dict, blob_name=blob_name)
 
         conformed_records = [self.conform_record(r) for r in context["records"]]
         join_keys = [self.conform_name(key, "column") for key in self.key_properties]
@@ -192,19 +191,12 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
             primary_keys=join_keys,
             as_temp_table=False,
         )
-        self.connector.ensure_azure_stage(
-            account_name=account_name,
-            container=container,
-            sas_token=sas_token,
-            skip_credential_setup=blob_cfg.get("skip_credential_setup", False),
-        )
 
-        blob_name = f"{path_prefix}/{uuid.uuid4()}/data.json"
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tmp:
             json.dump(conformed_records, tmp, default=str)
             tmp_path = tmp.name
         try:
-            upload_file(account_name, sas_token, container, blob_name, tmp_path)
+            manager.upload_file(tmp_path)
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
@@ -226,7 +218,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                         blob_path=blob_name,
                     )
             finally:
-                delete_blob(account_name, sas_token, container, blob_name)
+                manager.delete_blob()
 
     def process_batch(self, context: dict) -> None:
         """Process a batch with the given batch context.
