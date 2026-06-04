@@ -51,7 +51,11 @@ IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMaste
     CREATE MASTER KEY ENCRYPTION BY PASSWORD = '<strong-password>';
 ```
 
-**2. Database scoped credential** with the SAS token:
+**2. Database scoped credential** — choose one option:
+
+#### Option A: SAS token
+
+Simpler to set up; the token expires and must be rotated periodically.
 
 ```sql
 /*
@@ -71,6 +75,48 @@ To rotate the token later:
 ALTER DATABASE SCOPED CREDENTIAL [target_mssql_credential]
     WITH IDENTITY = N'SHARED ACCESS SIGNATURE',
          SECRET   = N'<new-sas-token>';
+```
+
+#### Option B: Managed Identity
+
+No secrets to rotate. Requires Azure SQL Server (not on-premises) with a system-assigned managed identity enabled.
+
+**Prerequisites (Azure portal or CLI):**
+
+1. Enable the system-assigned managed identity on the Azure SQL Server:
+   - Portal: **Azure SQL Server → Security → Identity → System assigned managed identity → On**
+   - CLI: `az sql server update --name <server> --resource-group <rg> --assign-identity`
+
+2. Grant the SQL Server's managed identity **Storage Blob Data Owner** (or **Storage Blob Data Reader**) on the container:
+
+   - Portal: **Storage account → Access Control (IAM) → + Add → Add role Assigment** and add the "Storage Blob Data Owner" role to the SQL Server managed identity
+
+   - CLI:
+
+     ```bash
+     PRINCIPAL_ID=$(az sql server show \
+       --name <server> \
+       --resource-group <rg> \
+       --query "identity.principalId" \
+       --output tsv)
+
+     az role assignment create \
+       --assignee "$PRINCIPAL_ID" \
+       --role "Storage Blob Data Owner" \
+       --scope "/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<account_name>/blobServices/default/containers/<container>"
+     ```
+
+**SQL:**
+
+```sql
+/*
+-- To recreate the object, first run:
+DROP EXTERNAL DATA SOURCE target_mssql_stage;
+DROP DATABASE SCOPED CREDENTIAL [target_mssql_credential];
+*/
+
+CREATE DATABASE SCOPED CREDENTIAL [target_mssql_credential]
+    WITH IDENTITY = N'MANAGED IDENTITY';
 ```
 
 **3. External data source** pointing at the container:
