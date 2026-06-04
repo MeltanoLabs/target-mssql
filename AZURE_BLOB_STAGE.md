@@ -216,3 +216,9 @@ WHEN NOT MATCHED BY TARGET THEN INSERT (…) VALUES (…);
 - **Batch size:** use a larger `batch_size_rows` to amortise the per-batch round-trip to blob storage (e.g. `"batch_size_rows": 50000`).
 - **Booleans:** stored as `BIT` in the staged file, inserted into the target's `VARCHAR(1)` column as `0`/`1`.
 - **Complex types (objects, arrays):** serialised to JSON strings, stored as `NVARCHAR(MAX)` — consistent with the non-staged path.
+
+## Further reading
+
+- [CREATE DATABASE SCOPED CREDENTIAL (Transact-SQL)](https://learn.microsoft.com/en-us/sql/t-sql/statements/create-database-scoped-credential-transact-sql)
+- [Import bulk data by using BULK INSERT or OPENROWSET(BULK…)](https://learn.microsoft.com/en-us/sql/relational-databases/import-export/import-bulk-data-by-using-bulk-insert-or-openrowset-bulk-sql-server)
+- [Examples of bulk access to data in Azure Blob Storage](https://learn.microsoft.com/en-us/sql/relational-databases/import-export/examples-of-bulk-access-to-data-in-azure-blob-storage)
