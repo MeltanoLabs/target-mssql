@@ -16,6 +16,16 @@ plugins:
       streams:
       - stream_name: animals
         input_filename: https://raw.githubusercontent.com/meltano/tap-smoke-test/refs/heads/main/demo-data/animals-data.jsonl
+  - name: tap-fedidb
+    variant: edgarrmondragon
+    pip_url: tap-fedidb
+    select:
+    - '!servers.*'
+  - name: tap-pypistats
+    variant: edgarrmondragon
+    pip_url: tap-pypistats
+    config:
+      packages: [meltano, singer-sdk]
   loaders:
   - name: target-mssql
     namespace: target_mssql
@@ -72,9 +82,9 @@ plugins:
       description: The driver to use for the database connection (pymssql or pyodbc)
     - name: odbc_driver
       kind: string
+      value: ODBC Driver 18 for SQL Server
       label: ODBC Driver
       description: The ODBC driver to use when driver=pyodbc (e.g. 'ODBC Driver 18 for SQL Server')
-      value: ODBC Driver 18 for SQL Server
     - name: trust_server_certificate
       kind: boolean
       value: true
@@ -82,9 +92,9 @@ plugins:
       description: Trust the server certificate without validation (useful for self-signed certs)
     - name: validate_records
       kind: boolean
+      value: false
       label: Validate Records
       description: Whether to validate the schema of the incoming streams
-      value: false
     - name: azure_blob_storage.account_name
       kind: string
       label: Azure Storage Account Name
@@ -102,9 +112,9 @@ plugins:
       description: Blob container used as the staging area
     - name: azure_blob_storage.path_prefix
       kind: string
+      value: target-mssql
       label: Azure Blob Path Prefix
       description: Virtual directory prefix inside the container
-      value: target-mssql
     - name: azure_blob_storage.credential_name
       kind: string
     - name: azure_blob_storage.data_source_name
