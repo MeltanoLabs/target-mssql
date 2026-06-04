@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import sqlalchemy
 from singer_sdk.helpers._typing import get_datelike_property_type
@@ -226,3 +226,121 @@ class MSSQLConnector(SQLConnector):
                 "column_type": column_type,
             },
         )
+
+    # -------------------------------------------------------------------------
+    # Azure Blob Storage stage
+    # -------------------------------------------------------------------------
+
+    _CREDENTIAL_NAME = "target_mssql_credential"
+    _DATA_SOURCE_NAME = "target_mssql_stage"
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._stage_prepared = False
+
+    def _openjson_type(self, property_jsonschema: dict) -> str:
+        """Return the SQL type string to use in an OPENJSON WITH clause."""
+        if self._jsonschema_type_check(property_jsonschema, ("string",)):
+            datelike = get_datelike_property_type(property_jsonschema)
+            if datelike == "date-time":
+                return "DATETIMEOFFSET"
+            if datelike == "time":
+                return "TIME"
+            if datelike == "date":
+                return "DATE"
+            maxlength = property_jsonschema.get("maxLength")
+            if maxlength is not None and maxlength <= 4000:
+                return f"NVARCHAR({maxlength})"
+            return "NVARCHAR(MAX)"
+        if self._jsonschema_type_check(property_jsonschema, ("integer",)):
+            return "BIGINT"
+        if self._jsonschema_type_check(property_jsonschema, ("number",)):
+            return "FLOAT" if self.config.get("prefer_float_over_numeric") else "NUMERIC(38, 16)"
+        if self._jsonschema_type_check(property_jsonschema, ("boolean",)):
+            return "BIT"
+        return "NVARCHAR(MAX)"
+
+    def _openjson_with_clause(self, schema: dict) -> str:
+        """Build the WITH (…) column list for OPENJSON."""
+        quote = self._dialect.identifier_preparer.quote
+        return ",\n            ".join(
+            f"{quote(col)} {self._openjson_type(jsonschema)} '$.{col}'"
+            for col, jsonschema in schema["properties"].items()
+        )
+
+    def insert_from_blob(
+        self,
+        connection: Connection,
+        full_table_name: str | FullyQualifiedName,
+        schema: dict,
+        blob_path: str,
+    ) -> None:
+        """INSERT all records from a staged JSON blob into *full_table_name*."""
+        quote = self._dialect.identifier_preparer.quote
+        properties = schema["properties"]
+        col_list = ", ".join(quote(c) for c in properties)
+        with_clause = self._openjson_with_clause(schema)
+        ds = self._DATA_SOURCE_NAME
+
+        sql = (
+            f"INSERT INTO {full_table_name} ({col_list})\n"  # noqa: S608
+            f"SELECT {col_list}\n"
+            f"FROM OPENROWSET(\n"
+            f"    BULK N'{blob_path}',\n"
+            f"    DATA_SOURCE = N'{ds}',\n"
+            f"    SINGLE_CLOB\n"
+            f") AS _blob\n"
+            f"CROSS APPLY OPENJSON(_blob.BulkColumn)\n"
+            f"WITH (\n"
+            f"    {with_clause}\n"
+            f") AS _src"
+        )
+        with connection.begin():
+            connection.exec_driver_sql(sql)
+
+    def merge_upsert_from_blob(
+        self,
+        connection: Connection,
+        full_table_name: str | FullyQualifiedName,
+        schema: dict,
+        blob_path: str,
+        join_keys: list[str],
+    ) -> None:
+        """MERGE records from a staged JSON blob into *full_table_name*."""
+        quote = self._dialect.identifier_preparer.quote
+        properties = schema["properties"]
+        col_names = list(properties.keys())
+        with_clause = self._openjson_with_clause(schema)
+        ds = self._DATA_SOURCE_NAME
+
+        join_condition = " AND ".join(f"_target.{quote(k)} = _src.{quote(k)}" for k in join_keys)
+        update_cols = [c for c in col_names if c not in join_keys]
+        matched_clause = (
+            "WHEN MATCHED THEN UPDATE SET " + ", ".join(f"_target.{quote(c)} = _src.{quote(c)}" for c in update_cols)
+            if update_cols
+            else ""
+        )
+        all_cols = ", ".join(quote(c) for c in col_names)
+        src_cols = ", ".join(f"_src.{quote(c)}" for c in col_names)
+
+        sql = (
+            f"MERGE INTO {full_table_name} AS _target\n"  # noqa: S608
+            f"USING (\n"
+            f"    SELECT *\n"
+            f"    FROM OPENROWSET(\n"
+            f"        BULK N'{blob_path}',\n"
+            f"        DATA_SOURCE = N'{ds}',\n"
+            f"        SINGLE_CLOB\n"
+            f"    ) AS _blob\n"
+            f"    CROSS APPLY OPENJSON(_blob.BulkColumn)\n"
+            f"    WITH (\n"
+            f"        {with_clause}\n"
+            f"    ) AS _src\n"
+            f") AS _src\n"
+            f"ON ({join_condition})\n"
+            f"{matched_clause}\n"
+            f"WHEN NOT MATCHED BY TARGET THEN\n"
+            f"    INSERT ({all_cols}) VALUES ({src_cols});"
+        )
+        with connection.begin():
+            connection.exec_driver_sql(sql)

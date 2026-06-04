@@ -65,6 +65,34 @@ that originally motivated the switch to direct MERGE VALUES.
 Fixed startup + first-batch overhead is ~1.3s. At steady state each 10,000-record batch
 takes ~2s through the temp-table + MERGE path.
 
+### Upsert path: Azure Blob Storage stage (Azure SQL staging, 8-column schema)
+
+Measured against `meltano-staging.database.windows.net` (Azure SQL), 50k-row batches.
+
+| Driver | Upsert method | Batch 1 | Batch 2 | 100k wall time | Throughput |
+|--------|---------------|---------|---------|----------------|------------|
+| pyodbc | staging table (INSERT heap → MERGE) | 133.7s | 115.1s | 4:22 | ~402 rec/s |
+| **pyodbc** | **blob stage (upload → OPENROWSET MERGE)** | **42.3s** | **38.6s** | **1:44** | **~961 rec/s** |
+| pymssql | staging table (INSERT heap → MERGE) | 214.8s | 198.3s | 7:06 | ~235 rec/s |
+| **pymssql** | **blob stage (upload → OPENROWSET MERGE)** | **41.6s** | **47.3s** | **1:41** | **~985 rec/s** |
+
+Key observations:
+
+- **Blob stage is ~2.4× faster for pyodbc, ~4.2× faster for pymssql** compared to the
+  staging-table path. The staging-table path pays Azure SQL round-trip latency on every
+  INSERT chunk (~24 round-trips per 50k batch); the blob path pays one upload + one
+  in-Azure MERGE, which is far cheaper over a high-latency WAN connection.
+- **The blob path eliminates the pyodbc/pymssql gap entirely.** With the staging-table
+  path pyodbc is ~1.7× faster than pymssql (driver matters for parameterised inserts).
+  With the blob path both drivers run at ~960-985 rec/s — the bottleneck shifts to the
+  server-side OPENROWSET MERGE, where the driver is not involved.
+- **Blob batch times are consistent** (pyodbc: 42.3/38.6s; pymssql: 41.6/47.3s)
+  compared to the staging-table path (pyodbc: 133.7/115.1s; pymssql: 214.8/198.3s),
+  confirming that variability in the old path comes from parameterised-insert overhead.
+- **Why it doesn't win as dramatically on local Docker:** there the round-trip latency is
+  <1 ms and the bottleneck is SQL Server CPU / I/O, so the OPENROWSET overhead matters
+  more relative to the INSERT savings.
+
 ## Batch timing breakdown (10k records, upsert path, chunked MERGE VALUES)
 
 | Step | Time | % |

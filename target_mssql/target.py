@@ -92,6 +92,55 @@ class TargetMSSQL(SQLTarget):
             description="Trust the server certificate without validation (useful for self-signed certs)",
             default=False,
         ),
+        th.Property(
+            "azure_blob_storage",
+            th.ObjectType(
+                th.Property(
+                    "account_name",
+                    th.StringType,
+                    required=True,
+                    description="Azure Storage account name",
+                ),
+                th.Property(
+                    "sas_token",
+                    th.StringType,
+                    required=True,
+                    secret=True,
+                    description=(
+                        "Shared Access Signature token for the storage account "
+                        "(without a leading '?'). Must grant read/write/delete on blobs."
+                    ),
+                ),
+                th.Property(
+                    "container",
+                    th.StringType,
+                    required=True,
+                    description="Blob container used as the staging area",
+                ),
+                th.Property(
+                    "path_prefix",
+                    th.StringType,
+                    default="target-mssql",
+                    description="Path prefix (virtual directory) inside the container",
+                ),
+                th.Property(
+                    "credential",
+                    th.StringType,
+                    required=True,
+                ),
+                th.Property(
+                    "data_source",
+                    th.StringType,
+                    required=True,
+                ),
+            ),
+            description=(
+                "Optional Azure Blob Storage stage for high-performance bulk loading. "
+                "When set, each batch is serialised to a JSON file, uploaded to blob "
+                "storage, and loaded into SQL Server via OPENROWSET(BULK …). "
+                "Requires azure-storage-blob: pip install 'target-mssql[azure]'."
+            ),
+        ),
     ).to_dict()
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

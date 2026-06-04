@@ -19,7 +19,7 @@ plugins:
   loaders:
   - name: target-mssql
     namespace: target_mssql
-    pip_url: -e .[pyodbc]
+    pip_url: -e .[azure,pyodbc]
     capabilities:
     - about
     - schema-flattening
@@ -85,3 +85,27 @@ plugins:
       label: Validate Records
       description: Whether to validate the schema of the incoming streams
       value: false
+    - name: azure_blob_storage.account_name
+      kind: string
+      label: Azure Storage Account Name
+      description: Azure Storage account name used as the bulk-load stage
+    - name: azure_blob_storage.sas_token
+      kind: string
+      label: Azure SAS Token
+      description: >-
+        Shared Access Signature token for the storage account container
+        (without a leading '?'). Minimum permissions: Read, Write, Create, Delete.
+      sensitive: true
+    - name: azure_blob_storage.container
+      kind: string
+      label: Azure Blob Container
+      description: Blob container used as the staging area
+    - name: azure_blob_storage.path_prefix
+      kind: string
+      label: Azure Blob Path Prefix
+      description: Virtual directory prefix inside the container
+      value: target-mssql
+    - name: azure_blob_storage.credential_name
+      kind: string
+    - name: azure_blob_storage.data_source_name
+      kind: string
