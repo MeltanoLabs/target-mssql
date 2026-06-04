@@ -54,6 +54,12 @@ IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMaste
 **2. Database scoped credential** with the SAS token:
 
 ```sql
+/*
+-- To recreate the object, first run:
+DROP EXTERNAL DATA SOURCE target_mssql_stage;
+DROP DATABASE SCOPED CREDENTIAL [target_mssql_credential];
+*/
+
 CREATE DATABASE SCOPED CREDENTIAL [target_mssql_credential]
     WITH IDENTITY = N'SHARED ACCESS SIGNATURE',
          SECRET   = N'<sas-token-without-leading-?>';
