@@ -140,7 +140,7 @@ GRANT CREATE TABLE TO [<db-user>];                    -- create target tables fo
 GRANT ALTER ANY EXTERNAL DATA SOURCE TO [<db-user>];  -- create the EXTERNAL DATA SOURCE on first run
 
 -- Server-level (run as sysadmin in master)
-GRANT ADMINISTER BULK OPERATIONS TO [<login-name>];   -- execute OPENROWSET(BULK …)
+GRANT ADMINISTER DATABASE BULK OPERATIONS TO [<db-user>];   -- execute OPENROWSET(BULK …)
 ```
 
 > **On-premises SQL Server 2017+** also requires Ad Hoc Distributed Queries:
