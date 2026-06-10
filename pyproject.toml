@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-azure = ["azure-storage-blob>=12,<13"]
+azure = ["azure-storage-blob>=12.29.0,<13"]
 pyodbc = ["pyodbc>=5.3.0,<6"]
 
 [project.scripts]
@@ -32,7 +32,7 @@ target-mssql = "target_mssql.target:TargetMSSQL.cli"
 
 [dependency-groups]
 dev = [{ include-group = "lint" }, "mypy>=2.1.0"]
-lint = ["ruff>=0.15.14"]
+lint = ["ruff>=0.15.15"]
 test = ["pytest>=9.0.3"]
 
 [tool.uv]
