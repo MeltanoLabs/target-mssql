@@ -10,7 +10,6 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from singer_sdk import metrics
 from singer_sdk.helpers._conformers import replace_leading_digit
 from singer_sdk.sql import SQLSink
 from sqlalchemy import Column
@@ -131,7 +130,6 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
         rows_per_stmt = max(1, _MAX_PARAM_LIMIT // len(col_names))
 
-        total = 0
         with connection.begin():
             for offset in range(0, len(insert_records), rows_per_stmt):
                 chunk = insert_records[offset : offset + rows_per_stmt]
@@ -139,10 +137,6 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                 sql = f"INSERT INTO {full_table_name} ({quoted_cols}) VALUES {placeholders}"  # noqa: S608
                 params = tuple(row[col] for row in chunk for col in col_names)
                 connection.exec_driver_sql(sql, params)
-                total += len(chunk)
-
-        with metrics.record_counter(str(full_table_name)) as record_counter:
-            record_counter.increment(total)
 
     def column_representation(
         self,
@@ -329,7 +323,6 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
         matched_clause = f"WHEN MATCHED THEN UPDATE SET {update_stmt}" if update_stmt else ""
 
-        total = 0
         with connection.begin():
             for offset in range(0, len(records), rows_per_stmt):
                 chunk = records[offset : offset + rows_per_stmt]
@@ -345,10 +338,6 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                         INSERT ({all_quoted}) VALUES ({source_vals});
                 """  # noqa: S608
                 connection.exec_driver_sql(merge_sql, params)
-                total += len(chunk)
-
-        with metrics.record_counter(str(full_table_name)) as record_counter:
-            record_counter.increment(total)
 
     def merge_upsert_from_table(
         self,
