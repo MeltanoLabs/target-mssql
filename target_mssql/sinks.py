@@ -311,7 +311,6 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                     schema=schema,
                     join_keys=join_keys,
                 )
-                self.record_counter_metric.increment_written(written)
 
             else:
                 written = self.bulk_insert_records(
@@ -320,7 +319,8 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                     schema=schema,
                     records=conformed_records,
                 )
-                self.record_counter_metric.increment_written(written)
+
+        self.record_counter_metric.increment_written(written)
 
     def merge_upsert_records(
         self,
