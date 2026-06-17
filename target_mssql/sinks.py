@@ -329,7 +329,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         schema: dict,
         records: list[dict[str, Any]],
         join_keys: list[str],
-    ) -> None:
+    ) -> int:
         """Upsert records directly using chunked MERGE … USING (VALUES …) AS source(…).
 
         Avoids writing to tempdb entirely, eliminating page-latch contention that
@@ -343,9 +343,11 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
             schema: Singer JSON schema for the stream.
             records: Pre-deduplicated records to upsert.
             join_keys: Column names used in the ON clause.
+        Returns:
+            The number of rows affected by the merge, as reported by the cursor.
         """
         if not records:
-            return
+            return 0
 
         columns = self.column_representation(schema)
         col_names = [col.name for col in columns]
@@ -366,6 +368,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
         matched_clause = f"WHEN MATCHED THEN UPDATE SET {update_stmt}" if update_stmt else ""
 
+        written = 0
         with connection.begin():
             for offset in range(0, len(records), rows_per_stmt):
                 chunk = records[offset : offset + rows_per_stmt]
@@ -380,7 +383,10 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                     WHEN NOT MATCHED BY TARGET THEN
                         INSERT ({all_quoted}) VALUES ({source_vals});
                 """  # noqa: S608
-                connection.exec_driver_sql(merge_sql, params)
+                cursor = connection.exec_driver_sql(merge_sql, params)
+                written += cursor.rowcount
+
+        return written
 
     def merge_upsert_from_table(
         self,
