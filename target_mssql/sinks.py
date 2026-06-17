@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from singer_sdk import metrics
 from singer_sdk.helpers._conformers import replace_leading_digit
 from singer_sdk.sql import SQLSink
 from sqlalchemy import Column
@@ -31,6 +32,31 @@ if TYPE_CHECKING:
 _MAX_PARAM_LIMIT = 2099  # SQL Server rejects exactly 2100 parameters; keep strictly under.
 
 
+class _WriteOnlyRecordCounter(metrics.Counter):
+    """A `record_count` counter that counts rows written, not rows read.
+
+    The SDK advances the sink record counter on every record read — once per
+    record (`singer_sdk.target_base`) and once per record in a BATCH file
+    (`Sink.process_batch_files`) — so the default `record_count` reflects rows
+    buffered off the wire, not rows committed. We ignore all of those increments
+    and instead advance the counter explicitly at write time via
+    `increment_written`. Standard periodic flushing (and the SDK's `exit()` flush at
+    `clean_up`) is preserved, and because the counter only ever increases it is
+    never negative.
+    """
+
+    def __init__(self, stream: str) -> None:
+        super().__init__(metrics.Metric.RECORD_COUNT, {metrics.Tag.STREAM: stream})
+
+    @override
+    def increment(self, value: int = 1) -> None:
+        """Ignore the SDK's read-based increments."""
+
+    def increment_written(self, value: int) -> None:
+        """Advance the counter by rows committed to the database."""
+        super().increment(value)
+
+
 class MSSQLSink(SQLSink[MSSQLConnector]):
     """mssql target sink class."""
 
@@ -39,6 +65,15 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._staging_prepared = False
+
+    @override
+    def get_sink_record_counter(self) -> _WriteOnlyRecordCounter:
+        """Count `record_count` by rows written rather than rows read.
+
+        We advance the counter at write time via `increment_written`, passing the
+        cursor's reported row count once the writing transaction has committed.
+        """
+        return _WriteOnlyRecordCounter(self.stream_name)
 
     # Copied purely to help with type hints
     @property
@@ -111,7 +146,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                 names.
             records: the input records.
         Returns:
-            True if table exists, False if not, None if unsure or undetectable.
+            The number of rows inserted, as reported by the cursor.
         """
         columns = self.column_representation(schema)
         col_names = [col.name for col in columns]
@@ -130,13 +165,17 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
         rows_per_stmt = max(1, _MAX_PARAM_LIMIT // len(col_names))
 
+        written = 0
         with connection.begin():
             for offset in range(0, len(insert_records), rows_per_stmt):
                 chunk = insert_records[offset : offset + rows_per_stmt]
                 placeholders = ", ".join([row_placeholder] * len(chunk))
                 sql = f"INSERT INTO {full_table_name} ({quoted_cols}) VALUES {placeholders}"  # noqa: S608
                 params = tuple(row[col] for row in chunk for col in col_names)
-                connection.exec_driver_sql(sql, params)
+                cursor = connection.exec_driver_sql(sql, params)
+                written += cursor.rowcount
+
+        return written
 
     def column_representation(
         self,
@@ -197,7 +236,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         with self.connector._engine.connect() as connection:
             try:
                 if join_keys:
-                    self.connector.merge_upsert_from_blob(
+                    written = self.connector.merge_upsert_from_blob(
                         connection=connection,
                         full_table_name=self.full_table_name,
                         schema=schema,
@@ -205,7 +244,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                         join_keys=join_keys,
                     )
                 else:
-                    self.connector.insert_from_blob(
+                    written = self.connector.insert_from_blob(
                         connection=connection,
                         full_table_name=self.full_table_name,
                         schema=schema,
@@ -213,6 +252,8 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                     )
             finally:
                 manager.delete_blob()
+
+        self.record_counter_metric.increment_written(written)
 
     def process_batch(self, context: dict) -> None:
         """Process a batch with the given batch context.
@@ -263,21 +304,23 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                     schema=schema,
                     records=deduped_records,
                 )
-                self.merge_upsert_from_table(
+                written = self.merge_upsert_from_table(
                     connection=connection,
                     from_table_name=staging,
                     to_table_name=self.full_table_name,
                     schema=schema,
                     join_keys=join_keys,
                 )
+                self.record_counter_metric.increment_written(written)
 
             else:
-                self.bulk_insert_records(
+                written = self.bulk_insert_records(
                     connection=connection,
                     full_table_name=self.full_table_name,
                     schema=schema,
                     records=conformed_records,
                 )
+                self.record_counter_metric.increment_written(written)
 
     def merge_upsert_records(
         self,
@@ -346,7 +389,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         to_table_name: str | FullyQualifiedName,
         schema: dict,
         join_keys: list[str],
-    ) -> int | None:
+    ) -> int:
         """Merge upsert data from one table to another.
         Args:
             from_table_name: The source table name.
@@ -354,8 +397,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
             join_keys: The merge upsert keys, or `None` to append.
             schema: Singer Schema message.
         Return:
-            The number of records copied, if detectable, or `None` if the API does not
-            report number of records affected/inserted.
+            The number of rows affected by the merge, as reported by the cursor.
         """
         # TODO think about sql injeciton,
         # issue here https://github.com/MeltanoLabs/target-postgres/issues/22
@@ -383,7 +425,9 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         """  # noqa: S608
 
         with connection.begin():
-            connection.exec_driver_sql(merge_sql)
+            result = connection.exec_driver_sql(merge_sql)
+            rowcount = result.rowcount
+        return rowcount
 
     def parse_full_table_name(self, full_table_name: str) -> tuple[str | None, str | None, str]:
         """Parse a fully qualified table name into its parts.

@@ -274,8 +274,11 @@ class MSSQLConnector(SQLConnector):
         full_table_name: str | FullyQualifiedName,
         schema: dict,
         blob_path: str,
-    ) -> None:
-        """INSERT all records from a staged JSON blob into *full_table_name*."""
+    ) -> int:
+        """INSERT all records from a staged JSON blob into *full_table_name*.
+
+        Returns the number of rows inserted, as reported by the cursor.
+        """
         quote = self._dialect.identifier_preparer.quote
         properties = schema["properties"]
         col_list = ", ".join(quote(c) for c in properties)
@@ -296,7 +299,9 @@ class MSSQLConnector(SQLConnector):
             f") AS _src"
         )
         with connection.begin():
-            connection.exec_driver_sql(sql)
+            result = connection.exec_driver_sql(sql)
+
+        return result.rowcount
 
     def merge_upsert_from_blob(
         self,
@@ -305,8 +310,11 @@ class MSSQLConnector(SQLConnector):
         schema: dict,
         blob_path: str,
         join_keys: list[str],
-    ) -> None:
-        """MERGE records from a staged JSON blob into *full_table_name*."""
+    ) -> int:
+        """MERGE records from a staged JSON blob into *full_table_name*.
+
+        Returns the number of rows affected by the merge, as reported by the cursor.
+        """
         quote = self._dialect.identifier_preparer.quote
         properties = schema["properties"]
         col_names = list(properties.keys())
@@ -343,4 +351,6 @@ class MSSQLConnector(SQLConnector):
             f"    INSERT ({all_cols}) VALUES ({src_cols});"
         )
         with connection.begin():
-            connection.exec_driver_sql(sql)
+            result = connection.exec_driver_sql(sql)
+
+        return result.rowcount
