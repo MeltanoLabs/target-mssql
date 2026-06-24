@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "pymssql~=2.3.13",
-    "singer-sdk[sql]~=0.54.4",
+    "singer-sdk[sql]~=0.54.5",
     "sqlalchemy~=2.0",
     "typing-extensions>=4.15.0 ; python_full_version < '3.12'",
 ]
