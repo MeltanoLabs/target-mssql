@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -64,6 +65,8 @@ class AzureBlobManager:
         except ImportError:
             msg = "azure-storage-blob is required for blob staging. Install with: pip install 'target-mssql[azure]'"
             raise ImportError(msg) from None
+
+        logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 
         service = BlobServiceClient(account_url=self.config.account_url, credential=self.config.sas_token)
         return service.get_blob_client(container=self.config.container, blob=self.blob_name)
