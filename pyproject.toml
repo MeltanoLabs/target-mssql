@@ -31,9 +31,9 @@ pyodbc = ["pyodbc>=5.3.0,<6"]
 target-mssql = "target_mssql.target:TargetMSSQL.cli"
 
 [dependency-groups]
-dev = [{ include-group = "lint" }, "mypy>=2.1.0"]
-lint = ["ruff>=0.15.17"]
-test = ["pytest>=9.1.0"]
+dev = [{ include-group = "lint" }, "mypy>=2.2.0"]
+lint = ["ruff>=0.15.20"]
+test = ["pytest>=9.1.1"]
 
 [tool.uv]
 default-groups = "all"
