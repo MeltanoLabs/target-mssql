@@ -1,36 +1,28 @@
-requires = [
-  "tox>=4.54",
-  "tox-uv",
-]
-envlist = [
-    "lint",
-    { product = [
-        { prefix = "3.", start = 10, stop = 14 },
-    ] },
-]
+requires = ["tox>=4.54", "tox-uv"]
+envlist = ["lint", { product = [{ prefix = "3.", start = 10, stop = 14 }] }]
 
 [env_run_base]
 description = "run tests on Python {py_dot_ver}"
 runner = "uv-venv-runner"
 package = "uv"
-dependency_groups = [
-    "test"
-]
+dependency_groups = ["test"]
 extras = ["pyodbc"]
-commands = [["pytest", "--capture=no"]]
+commands = [
+    [
+        "pytest",
+        "--capture=no",
+        { replace = "posargs", default = [
+            "tests",
+        ], extend = true },
+    ],
+]
 
 [env.format]
 description = "format code"
 dependency_groups = ["lint"]
-commands = [
-    ["ruff", "format", "target_mssql"],
-    ["ruff", "check", "--fix", "target_mssql"],
-]
+commands = [["ruff", "format"], ["ruff", "check", "--fix"]]
 
 [env.lint]
 description = "lint code"
 dependency_groups = ["lint"]
-commands = [
-    ["ruff", "format", "--check", "target_mssql"],
-    ["ruff", "check", "target_mssql"],
-]
+commands = [["ruff", "format", "--check"], ["ruff", "check"]]

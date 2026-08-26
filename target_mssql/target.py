@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import sqlalchemy.engine.url
 from singer_sdk import Sink
 from singer_sdk import typing as th
+from singer_sdk.helpers.capabilities import PluginCapabilities
 from singer_sdk.sql import SQLTarget
 
 from target_mssql.connector import MSSQLConnector
@@ -26,6 +27,7 @@ class TargetMSSQL(SQLTarget):
     """Singer target for mssql."""
 
     name = "target-mssql"
+    capabilities = [*SQLTarget.capabilities, PluginCapabilities.BATCH]
     config_jsonschema = th.PropertiesList(
         th.Property(
             "sqlalchemy_url",
@@ -184,7 +186,7 @@ class TargetMSSQL(SQLTarget):
 
         return self._url
 
-    @override
+    @override  # type: ignore[misc]
     def add_sink(  # ty:ignore[override-of-final-method]
         self,
         stream_name: str,
@@ -219,7 +221,7 @@ class TargetMSSQL(SQLTarget):
         self._sinks_active[stream_name] = sink
         return sink
 
-    @override
+    @override  # type: ignore[misc]
     def add_sqlsink(  # ty:ignore[override-of-final-method]
         self,
         stream_name: str,
@@ -249,7 +251,7 @@ class TargetMSSQL(SQLTarget):
 
         return sink
 
-    # @override
+    @override
     def create_sink(
         self,
         *,
