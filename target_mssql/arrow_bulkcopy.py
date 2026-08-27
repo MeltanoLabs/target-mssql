@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 import pyarrow as pa
 import pyarrow.compute as pc
 import sqlalchemy.engine.url
+from singer_sdk.helpers._typing import get_datelike_property_type
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -75,10 +76,23 @@ def _conform_column(
     ):
         # `to_sql_type` maps "number" to NUMERIC(38, 16) unless prefer_float_over_numeric is
         # set. mssql-python's Arrow writer needs a matching Arrow decimal128 type here -- it
-        # doesn't do float64->NUMERIC conversion the way row-by-row bulkcopy() would.
-        if not pa.types.is_decimal(column.type):
-            return column.cast(pa.decimal128(38, 16))
-        return column
+        # doesn't do float64->NUMERIC conversion the way row-by-row bulkcopy() would, and its
+        # Rust writer only supports 128/256-bit decimals -- not the narrower decimal32/decimal64
+        # an ADBC-based tap can produce for a source NUMERIC/DECIMAL column.
+        if pa.types.is_decimal128(column.type) or pa.types.is_decimal256(column.type):
+            return column
+        return column.cast(pa.decimal128(38, 16))
+
+    if (
+        pa.types.is_timestamp(column.type)
+        and column.type.tz is None
+        and get_datelike_property_type(property_jsonschema) == "date-time"
+    ):
+        # `to_sql_type` maps a `date-time` property to DATETIMEOFFSET (timezone-aware).
+        # mssql-python's Arrow writer rejects a naive timestamp source column against a
+        # DATETIMEOFFSET destination outright, unlike the row-by-row path -- assume UTC,
+        # since Singer's `date-time` format doesn't distinguish naive from zoned values.
+        return pc.assume_timezone(column, "UTC")
 
     if pa.types.is_string(column.type) or pa.types.is_large_string(column.type):
         return pc.replace_substring(column, pattern="\x00", replacement="")

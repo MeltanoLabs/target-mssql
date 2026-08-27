@@ -1,10 +1,12 @@
 """Attempt at making some standard Target Tests."""
 
 # flake8: noqa
+import datetime as dt
 import io
 import json
 import uuid
 from contextlib import redirect_stdout
+from decimal import Decimal
 from pathlib import Path
 
 import pyarrow as pa
@@ -395,6 +397,99 @@ def test_arrow_batch_upsert(mssql_config, tmp_path):
             f"SELECT id, value FROM {full_table_name} ORDER BY id"  # noqa: S608
         ).fetchall()
     assert [tuple(r) for r in rows] == [(1, "one"), (2, "two-updated"), (3, "three")]
+
+
+def test_arrow_batch_narrow_decimal(mssql_config, tmp_path):
+    """BATCH arrow files with decimal32/decimal64 "number" columns (issue #48).
+
+    ADBC-based taps can produce a source NUMERIC/DECIMAL column as Arrow decimal64 rather
+    than decimal128 -- mssql-python's Rust bulk-copy writer only accepts 128/256-bit
+    decimals, so `_conform_column` must upcast narrower decimal widths before bulk-copy.
+    """
+    stream = f"arrow_narrow_decimal_test_{uuid.uuid4().hex[:8]}"
+    schema = {
+        "type": "SCHEMA",
+        "stream": stream,
+        "schema": {
+            "properties": {
+                "id": {"type": "integer"},
+                "balance": {"type": ["number", "null"]},
+            }
+        },
+        "key_properties": [],
+    }
+
+    arrow_schema = pa.schema([("id", pa.int64()), ("balance", pa.decimal64(12, 2))])
+    table = pa.table(
+        {"id": [1, 2, 3], "balance": [Decimal("1.23"), Decimal("4.56"), Decimal("7.89")]},
+        schema=arrow_schema,
+    )
+    arrow_path = tmp_path / "narrow_decimal.arrow"
+    with arrow_path.open("wb") as file, ipc.new_file(file, table.schema) as writer:
+        writer.write_table(table)
+
+    target = TargetMSSQL(config={**mssql_config, "trust_server_certificate": True})
+    buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, _arrow_batch_message(stream, arrow_path)]))
+    target.listen(buf)
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=[]).connector
+    full_table_name = f"{mssql_config['table_prefix']}{stream}"
+    with connector._engine.connect() as connection:
+        rows = connection.exec_driver_sql(
+            f"SELECT id, balance FROM {full_table_name} ORDER BY id"  # noqa: S608
+        ).fetchall()
+    assert [(r[0], str(r[1])) for r in rows] == [
+        (1, "1.2300000000000000"),
+        (2, "4.5600000000000000"),
+        (3, "7.8900000000000000"),
+    ]
+
+
+def test_arrow_batch_naive_timestamp(mssql_config, tmp_path):
+    """BATCH arrow files with a naive timestamp against a `date-time` property (issue #49).
+
+    `to_sql_type` maps `date-time` to DATETIMEOFFSET (timezone-aware), but a source like
+    `tap-postgres` against a `timestamp without time zone` column produces a naive Arrow
+    timestamp -- mssql-python's Arrow writer rejects that combination outright, so
+    `_conform_column` must assume UTC for naive timestamps against a `date-time` property.
+    """
+
+    stream = f"arrow_naive_timestamp_test_{uuid.uuid4().hex[:8]}"
+    schema = {
+        "type": "SCHEMA",
+        "stream": stream,
+        "schema": {
+            "properties": {
+                "id": {"type": "integer"},
+                "signup_date": {"type": ["string", "null"], "format": "date-time"},
+            }
+        },
+        "key_properties": [],
+    }
+
+    arrow_schema = pa.schema([("id", pa.int64()), ("signup_date", pa.timestamp("us"))])  # no tz
+    table = pa.table(
+        {"id": [1, 2], "signup_date": [dt.datetime(2024, 1, 1), dt.datetime(2024, 6, 15, 12, 30)]},
+        schema=arrow_schema,
+    )
+    arrow_path = tmp_path / "naive_timestamp.arrow"
+    with arrow_path.open("wb") as file, ipc.new_file(file, table.schema) as writer:
+        writer.write_table(table)
+
+    target = TargetMSSQL(config={**mssql_config, "trust_server_certificate": True})
+    buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, _arrow_batch_message(stream, arrow_path)]))
+    target.listen(buf)
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=[]).connector
+    full_table_name = f"{mssql_config['table_prefix']}{stream}"
+    with connector._engine.connect() as connection:
+        rows = connection.exec_driver_sql(
+            f"SELECT id, signup_date FROM {full_table_name} ORDER BY id"  # noqa: S608
+        ).fetchall()
+    assert [tuple(r) for r in rows] == [
+        (1, dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)),
+        (2, dt.datetime(2024, 6, 15, 12, 30, tzinfo=dt.timezone.utc)),
+    ]
 
 
 def test_param_limit(mssql_pyodbc_config):
