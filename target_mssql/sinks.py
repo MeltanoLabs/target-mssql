@@ -8,13 +8,17 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import unquote, urlparse
 
+import mssql_python
+import pyarrow as pa
 from singer_sdk import metrics
 from singer_sdk.helpers._conformers import replace_leading_digit
 from singer_sdk.sql import SQLSink
 from sqlalchemy import Column
 
+from target_mssql import arrow_bulkcopy
 from target_mssql.connector import MSSQLConnector
 
 if sys.version_info >= (3, 12):
@@ -23,10 +27,16 @@ else:
     from typing_extensions import override
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
+    from singer_sdk.helpers._batch import BaseBatchFileEncoding
     from singer_sdk.sql.connector import FullyQualifiedName
     from sqlalchemy.engine import Connection
+
+
+def _file_uri_to_path(uri: str) -> str:
+    """Convert a local `file://` batch manifest URI to a filesystem path."""
+    return unquote(urlparse(uri).path)
 
 
 _MAX_PARAM_LIMIT = 2099  # SQL Server rejects exactly 2100 parameters; keep strictly under.
@@ -84,6 +94,19 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         """
         return self._connector
 
+    # Copied purely to help with type hints
+    @property
+    def record_counter_metric(self) -> _WriteOnlyRecordCounter:
+        """The record counter for this sink.
+        Returns:
+            The record counter, narrowed to `_WriteOnlyRecordCounter` so
+            `increment_written` is statically known (the base `Sink` declares this
+            property's return type as `metrics.Counter`, which doesn't have it).
+            `get_sink_record_counter` below is the only place `_record_counter` is
+            ever constructed, and it always returns a `_WriteOnlyRecordCounter`.
+        """
+        return cast("_WriteOnlyRecordCounter", self._record_counter)
+
     @property
     def schema_name(self) -> str | None:
         """Return the schema name or `None` if using names with no schema part.
@@ -128,13 +151,13 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
         return record
 
-    def bulk_insert_records(
+    def bulk_insert_records(  # type: ignore[override]
         self,
         connection: Connection,
         full_table_name: str | FullyQualifiedName,
         schema: dict,
         records: Iterable[dict[str, Any]],
-    ) -> int | None:
+    ) -> int | None:  # ty: ignore[invalid-method-override]
         """Bulk insert records to an existing destination table.
 
         Uses multi-row INSERT statements chunked to stay within SQL Server's
@@ -255,6 +278,92 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
         self.record_counter_metric.increment_written(written)
 
+    def _open_native_connection(self) -> mssql_python.Connection:
+        """Open a dedicated mssql-python connection, used only for Arrow bulk-copy.
+
+        Kept separate from the SQLAlchemy engine (which may be configured with
+        `driver: pymssql` or `driver: pyodbc`) since mssql-python is the only driver
+        that exposes `bulkcopy_arrow`. Opened fresh per batch and closed by the caller
+        rather than cached on the sink: the SDK doesn't guarantee `clean_up()` runs for
+        a sink retired mid-stream by a schema change (it's only called on sinks still
+        active at end-of-pipe, per `Target.drain_all`), so a connection cached here could
+        otherwise leak until garbage collection.
+        """
+        kwargs = arrow_bulkcopy.connect_kwargs_from_url(
+            self.connector.sqlalchemy_url,
+            trust_server_certificate=self.config.get("trust_server_certificate", False),
+        )
+        # Autocommit: `bulkcopy_arrow` opens its own internal connection under the
+        # hood, separate from this cursor's. A held-open transaction on this
+        # connection (e.g. the `SELECT ... INTO` staging DDL) would keep a schema
+        # lock that blocks that internal connection from seeing the new table.
+        return mssql_python.connect(autocommit=True, **kwargs)
+
+    @override
+    def process_batch_files(
+        self,
+        encoding: BaseBatchFileEncoding,
+        files: Sequence[str],
+    ) -> None:
+        """Process `BATCH` messages, special-casing Arrow IPC files for native bulk-copy.
+
+        Non-Arrow encodings (`jsonl`, `parquet`) fall back to the SDK's default handling,
+        which decodes them into `context["records"]` and calls `process_batch`.
+        """
+        if encoding.format != "arrow":
+            super().process_batch_files(encoding, files)
+            return
+
+        for path in files:
+            local_path = _file_uri_to_path(path)
+            with pa.ipc.open_file(local_path) as reader:
+                table = reader.read_all()
+            self._process_arrow_batch_native(table)
+            # Manifest files are consume-once: nothing else reads them afterward.
+            Path(local_path).unlink(missing_ok=True)
+
+    def _process_arrow_batch_native(self, table: pa.Table) -> None:
+        """Bulk-copy an Arrow batch straight into MSSQL, bypassing the dict-based path.
+
+        Bypasses the Azure Blob stage entirely: native TDS bulk-copy from Arrow is
+        strictly faster and simpler than serialising to JSON, uploading to blob storage,
+        and loading via OPENROWSET/OPENJSON.
+        """
+        schema = self.conform_schema(self.schema)
+        join_keys = [self.conform_name(key, "column") for key in self.key_properties]
+
+        table = arrow_bulkcopy.conform_arrow_table(table, schema, self.conform_name, self.connector)
+        if table.num_rows == 0:
+            return
+
+        self.connector.prepare_table(
+            full_table_name=self.full_table_name,
+            schema=schema,
+            primary_keys=join_keys,
+            as_temp_table=False,
+        )
+
+        with self._open_native_connection() as conn, conn.cursor() as cursor:
+            if join_keys:
+                temp_table_name = arrow_bulkcopy.new_temp_table_name()
+                merge_sql = self._build_merge_from_table_sql(
+                    from_table_name=temp_table_name,
+                    to_table_name=self.full_table_name,
+                    schema=schema,
+                    join_keys=join_keys,
+                )
+                written = arrow_bulkcopy.bulk_copy_upsert(
+                    cursor,
+                    temp_table_name,
+                    str(self.full_table_name),
+                    table,
+                    merge_sql,
+                )
+            else:
+                written = arrow_bulkcopy.bulk_copy_append(cursor, str(self.full_table_name), table)
+
+        self.record_counter_metric.increment_written(written)
+
     def process_batch(self, context: dict) -> None:
         """Process a batch with the given batch context.
         Writes a batch to the SQL target. Developers may override this method
@@ -270,6 +379,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
         join_keys = [self.conform_name(key, "column") for key in self.key_properties]
         schema = self.conform_schema(self.schema)
+        written: int | None
 
         with self.connector._engine.connect() as connection:
             if self.key_properties:
@@ -320,7 +430,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                     records=conformed_records,
                 )
 
-        self.record_counter_metric.increment_written(written)
+        self.record_counter_metric.increment_written(written or 0)
 
     def merge_upsert_records(
         self,
@@ -388,22 +498,26 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
         return written
 
-    def merge_upsert_from_table(
+    def _build_merge_from_table_sql(
         self,
-        connection: Connection,
         from_table_name: str | FullyQualifiedName,
         to_table_name: str | FullyQualifiedName,
         schema: dict,
         join_keys: list[str],
-    ) -> int:
-        """Merge upsert data from one table to another.
+    ) -> str:
+        """Build a `MERGE INTO ... USING <table>` statement merging one table into another.
+
+        Pure SQL-text construction (no connection needed) so it can be executed either via
+        a SQLAlchemy `Connection` (`merge_upsert_from_table`) or a raw `mssql-python` cursor
+        (the native Arrow upsert path in `_process_arrow_batch_native`).
+
         Args:
             from_table_name: The source table name.
             to_table_name: The destination table name.
             join_keys: The merge upsert keys, or `None` to append.
             schema: Singer Schema message.
         Return:
-            The number of rows affected by the merge, as reported by the cursor.
+            The MERGE statement text.
         """
         # TODO think about sql injeciton,
         # issue here https://github.com/MeltanoLabs/target-postgres/issues/22
@@ -420,7 +534,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         )  # noqa
 
         matched_clause = f"WHEN MATCHED THEN UPDATE SET {update_stmt}" if update_stmt else ""
-        merge_sql = f"""
+        return f"""
             MERGE INTO {to_table_name} AS target
             USING {from_table_name} AS temp
             ON {join_condition}
@@ -429,6 +543,25 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                 INSERT ({", ".join(quoted_keys.values())})
                 VALUES ({", ".join([f"temp.{quoted_key}" for quoted_key in quoted_keys.values()])});
         """  # noqa: S608
+
+    def merge_upsert_from_table(  # type: ignore[override]
+        self,
+        connection: Connection,
+        from_table_name: str | FullyQualifiedName,
+        to_table_name: str | FullyQualifiedName,
+        schema: dict,
+        join_keys: list[str],
+    ) -> int:  # ty: ignore[invalid-method-override]
+        """Merge upsert data from one table to another.
+        Args:
+            from_table_name: The source table name.
+            to_table_name: The destination table name.
+            join_keys: The merge upsert keys, or `None` to append.
+            schema: Singer Schema message.
+        Return:
+            The number of rows affected by the merge, as reported by the cursor.
+        """
+        merge_sql = self._build_merge_from_table_sql(from_table_name, to_table_name, schema, join_keys)
 
         with connection.begin():
             result = connection.exec_driver_sql(merge_sql)

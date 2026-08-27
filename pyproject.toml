@@ -17,8 +17,9 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
+    "mssql-python[pyarrow]>=1.13.0,<2",
     "pymssql~=2.3.13",
-    "singer-sdk[sql]~=0.54.5",
+    "singer-sdk[sql]~=0.55.0a6",
     "sqlalchemy~=2.0",
     "typing-extensions>=4.15.0 ; python_full_version < '3.12'",
 ]
@@ -31,15 +32,20 @@ pyodbc = ["pyodbc>=5.3.0,<6"]
 target-mssql = "target_mssql.target:TargetMSSQL.cli"
 
 [dependency-groups]
-dev = [{ include-group = "lint" }, "mypy>=2.3.1"]
+dev = [
+    { include-group = "lint" },
+    "mypy>=2.2.0",
+    "pyarrow-stubs>=20.0.0.20260819",
+]
 lint = ["ruff>=0.16.3"]
-test = ["pytest>=9.1.1"]
+test = [
+    "meltano-tap-countries @ git+https://github.com/meltano/sdk.git@main#subdirectory=packages/meltano-tap-countries",
+    "meltano-tap-fundamentals @ git+https://github.com/meltano/sdk.git@main#subdirectory=packages/meltano-tap-fundamentals",
+    "pytest>=9.1.1",
+]
 
 [tool.uv]
 default-groups = "all"
-
-# [tool.uv.sources]
-# singer-sdk = { git = "https://github.com/meltano/sdk.git", rev = "main" }
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -57,7 +63,7 @@ filterwarnings = [
 log_level = "INFO"
 minversion = "9"
 strict = true
-testpaths = ["target_mssql/tests"]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
@@ -87,3 +93,6 @@ max-complexity = 10
 
 [tool.ruff.lint.isort]
 known-first-party = ["target_mssql"]
+
+[tool.mypy]
+follow_untyped_imports = true

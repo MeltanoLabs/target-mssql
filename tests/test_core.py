@@ -3,17 +3,18 @@
 # flake8: noqa
 import io
 import json
+import uuid
 from contextlib import redirect_stdout
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.ipc as ipc
 import pytest
 from singer_sdk.testing import sync_end_to_end
 
 from target_mssql.target import TargetMSSQL
-from target_mssql.tests.samples.aapl.aapl import Fundamentals
-from target_mssql.tests.samples.sample_tap_countries.countries_tap import (
-    SampleTapCountries,
-)
+from tap_fundamentals import Fundamentals
+from tap_countries.tap import TapCountries
 
 
 @pytest.fixture()
@@ -77,7 +78,7 @@ def singer_file_to_target(file_name, target) -> None:
 # Test name would work well
 @pytest.mark.skip(reason="TODO: Something with identity, doesn't make sense. external API, skipping")
 def test_countries_to_mssql(mssql_config):
-    tap = SampleTapCountries(config={}, state=None)
+    tap = TapCountries(config={}, state=None)
     target = TargetMSSQL(config=mssql_config)
     sync_end_to_end(tap, target)
 
@@ -280,6 +281,120 @@ def mssql_pyodbc_config():
         "odbc_driver": "ODBC Driver 18 for SQL Server",
         "trust_server_certificate": True,
     }
+
+
+def _write_arrow_ipc_file(tmp_path: Path, name: str, columns: dict) -> Path:
+    """Write a small Arrow IPC file from a dict of {column_name: list_of_values}."""
+    table = pa.table(columns)
+    arrow_path = tmp_path / name
+    with arrow_path.open("wb") as file, ipc.new_file(file, table.schema) as writer:
+        writer.write_table(table)
+    return arrow_path
+
+
+def _arrow_batch_message(stream: str, arrow_path: Path) -> dict:
+    return {
+        "type": "BATCH",
+        "stream": stream,
+        "encoding": {"format": "arrow"},
+        "manifest": [arrow_path.as_uri()],
+    }
+
+
+def test_arrow_batch_append(mssql_config, tmp_path):
+    """BATCH messages with encoding.format=arrow, no key_properties (append path)."""
+    stream = f"arrow_append_test_{uuid.uuid4().hex[:8]}"
+    schema = {
+        "type": "SCHEMA",
+        "stream": stream,
+        "schema": {
+            "properties": {
+                "id": {"type": "integer"},
+                "name": {"type": ["string", "null"], "maxLength": 50},
+                "amount": {"type": ["number", "null"]},
+                "active": {"type": ["boolean", "null"]},
+                "tags": {"type": ["array", "null"]},
+                "meta": {"type": ["object", "null"]},
+            }
+        },
+        "key_properties": [],
+    }
+
+    arrow_path = _write_arrow_ipc_file(
+        tmp_path,
+        "append.arrow",
+        {
+            "id": pa.array([1, 2, 3], type=pa.int64()),
+            "name": pa.array(["a\x00lice", "bob", None]),
+            "amount": pa.array([1.5, None, 3.25]),
+            "active": pa.array([True, False, None]),
+            "tags": pa.array([["x", "y"], [], None]),
+            "meta": pa.array([{"k": "v"}, None, {"k2": 2}]),
+        },
+    )
+
+    target = TargetMSSQL(config={**mssql_config, "trust_server_certificate": True})
+    buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, _arrow_batch_message(stream, arrow_path)]))
+    target.listen(buf)
+
+    assert not arrow_path.exists(), "manifest file should be deleted after processing (consume-once)"
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=[]).connector
+    with connector._engine.connect() as connection:
+        full_table_name = f"{mssql_config['table_prefix']}{stream}"
+        rows = connection.exec_driver_sql(f"SELECT COUNT(*) FROM {full_table_name}").scalar()
+    assert rows == 3
+
+
+def test_arrow_batch_upsert(mssql_config, tmp_path):
+    """BATCH messages with encoding.format=arrow and key_properties (temp-table + MERGE path)."""
+    stream = f"arrow_upsert_test_{uuid.uuid4().hex[:8]}"
+    schema = {
+        "type": "SCHEMA",
+        "stream": stream,
+        "schema": {
+            "properties": {
+                "id": {"type": "integer"},
+                "value": {"type": ["string", "null"], "maxLength": 50},
+            }
+        },
+        "key_properties": ["id"],
+    }
+
+    first_batch = _write_arrow_ipc_file(
+        tmp_path,
+        "upsert_1.arrow",
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array(["one", "two"]),
+        },
+    )
+    arrow_config = {**mssql_config, "trust_server_certificate": True}
+    target = TargetMSSQL(config=arrow_config)
+    buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, _arrow_batch_message(stream, first_batch)]))
+    target.listen(buf)
+
+    second_batch = _write_arrow_ipc_file(
+        tmp_path,
+        "upsert_2.arrow",
+        {
+            "id": pa.array([2, 3], type=pa.int64()),
+            "value": pa.array(["two-updated", "three"]),
+        },
+    )
+    target = TargetMSSQL(config=arrow_config)
+    buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, _arrow_batch_message(stream, second_batch)]))
+    target.listen(buf)
+
+    assert not second_batch.exists()
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=["id"]).connector
+    full_table_name = f"{mssql_config['table_prefix']}{stream}"
+    with connector._engine.connect() as connection:
+        rows = connection.exec_driver_sql(
+            f"SELECT id, value FROM {full_table_name} ORDER BY id"  # noqa: S608
+        ).fetchall()
+    assert [tuple(r) for r in rows] == [(1, "one"), (2, "two-updated"), (3, "three")]
 
 
 def test_param_limit(mssql_pyodbc_config):
