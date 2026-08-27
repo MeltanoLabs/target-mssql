@@ -29,11 +29,16 @@ Regarding connection info, either the `sqlalchemy_url` or `username`, `password`
 
 See [AZURE_BLOB_STAGE.md](AZURE_BLOB_STAGE.md) for instructions on using Azure Blob Storage as a high-performance bulk-load stage.
 
+### Arrow `BATCH` support
+
+`target-mssql` accepts Singer `BATCH` messages with `encoding: {"format": "arrow"}` (Arrow IPC file format) with no configuration needed — any tap that emits Arrow batch files gets routed automatically through a native bulk-copy path (via the `mssql-python` driver's `bulkcopy_arrow`), bypassing per-record processing and the Azure Blob stage entirely for those batches. Streams with `key_properties` are staged into a temp table and merged; streams without are copied straight into the target table. Manifest files are treated as consume-once and deleted after loading.
+
 ## Capabilities
 
 * `about`
 * `stream-maps`
 * `schema-flattening`
+* `batch`
 
 ## Settings
 
