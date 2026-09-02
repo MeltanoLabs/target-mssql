@@ -34,10 +34,10 @@ target-mssql = "target_mssql.target:TargetMSSQL.cli"
 [dependency-groups]
 dev = [
     { include-group = "lint" },
-    "mypy>=2.2.0",
+    "mypy>=2.3.1",
     "pyarrow-stubs>=20.0.0.20260819",
 ]
-lint = ["ruff>=0.16.3"]
+lint = ["ruff>=0.16.4"]
 test = [
     "meltano-tap-countries @ git+https://github.com/meltano/sdk.git@main#subdirectory=packages/meltano-tap-countries",
     "meltano-tap-fundamentals @ git+https://github.com/meltano/sdk.git@main#subdirectory=packages/meltano-tap-fundamentals",
