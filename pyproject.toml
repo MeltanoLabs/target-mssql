@@ -19,7 +19,7 @@ classifiers = [
 dependencies = [
     "mssql-python[pyarrow]>=1.14.0,<2",
     "pymssql~=2.3.13",
-    "singer-sdk[sql]~=0.55.0a6",
+    "singer-sdk[sql]~=0.55.0a7",
     "sqlalchemy~=2.0",
     "typing-extensions>=4.15.0 ; python_full_version < '3.12'",
 ]
