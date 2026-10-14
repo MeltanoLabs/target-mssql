@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-azure = ["azure-storage-blob>=12.30.0,<13"]
+azure = ["azure-storage-blob>=12.31.0,<13"]
 pyodbc = ["pyodbc>=5.3.0,<6"]
 
 [project.scripts]
@@ -34,10 +34,10 @@ target-mssql = "target_mssql.target:TargetMSSQL.cli"
 [dependency-groups]
 dev = [
     { include-group = "lint" },
-    "mypy>=2.3.1",
+    "mypy>=2.4.0",
     "pyarrow-stubs>=20.0.0.20260819",
 ]
-lint = ["ruff>=0.16.4"]
+lint = ["ruff>=0.16.10"]
 test = [
     "meltano-tap-countries @ git+https://github.com/meltano/sdk.git@main#subdirectory=packages/meltano-tap-countries",
     "meltano-tap-fundamentals @ git+https://github.com/meltano/sdk.git@main#subdirectory=packages/meltano-tap-fundamentals",
