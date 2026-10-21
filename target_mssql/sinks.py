@@ -8,6 +8,7 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote, urlparse
 
@@ -75,6 +76,20 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._staging_prepared = False
+
+    @override
+    def setup(self) -> None:
+        """Log the total setup time, including schema and table preparation."""
+        self.logger.info("[TIMING] stream=%s method=setup started", self.stream_name)
+        start = perf_counter()
+        try:
+            super().setup()
+        finally:
+            self.logger.info(
+                "[TIMING] stream=%s method=setup elapsed=%.3fs",
+                self.stream_name,
+                perf_counter() - start,
+            )
 
     @override
     def get_sink_record_counter(self) -> _WriteOnlyRecordCounter:

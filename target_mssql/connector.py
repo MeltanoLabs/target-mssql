@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlalchemy
@@ -31,6 +32,34 @@ class MSSQLConnector(SQLConnector):
     allow_column_alter: bool = True  # Whether altering column types is supported.
     allow_merge_upsert: bool = True  # Whether MERGE UPSERT is supported.
     allow_temp_tables: bool = True  # Whether temp tables are supported.
+
+    @override
+    def prepare_schema(self, schema_name: str) -> None:
+        """Log the time spent checking or creating the SQL schema."""
+        self.logger.info("[TIMING] schema=%s method=prepare_schema started", schema_name)
+        start = perf_counter()
+        try:
+            return super().prepare_schema(schema_name)
+        finally:
+            self.logger.info(
+                "[TIMING] schema=%s method=prepare_schema elapsed=%.3fs",
+                schema_name,
+                perf_counter() - start,
+            )
+
+    @override
+    def prepare_table(self, full_table_name: str | FullyQualifiedName, *args: Any, **kwargs: Any) -> None:
+        """Log each table check, including calls made for subsequent batches."""
+        self.logger.info("[TIMING] table=%s method=prepare_table started", full_table_name)
+        start = perf_counter()
+        try:
+            return super().prepare_table(full_table_name, *args, **kwargs)
+        finally:
+            self.logger.info(
+                "[TIMING] table=%s method=prepare_table elapsed=%.3fs",
+                full_table_name,
+                perf_counter() - start,
+            )
 
     @override
     def create_schema(self, schema_name: str):
