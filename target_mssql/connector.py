@@ -260,13 +260,35 @@ class MSSQLConnector(SQLConnector):
             return "BIT"
         return "NVARCHAR(MAX)"
 
-    def _openjson_with_clause(self, schema: dict) -> str:
-        """Build the WITH (…) column list for OPENJSON."""
+    def _openjson_with_clause(
+        self,
+        schema: dict,
+        join_keys: list[str] | None = None,
+    ) -> str:
+        """Build the WITH (…) column list for OPENJSON.
+
+        For string MERGE keys use the same VARCHAR(255) type as the
+        destination primary key, avoiding implicit conversion on the
+        indexed target column when joining against OPENJSON data.
+        """
         quote = self._dialect.identifier_preparer.quote
-        return ",\n            ".join(
-            f"{quote(col)} {self._openjson_type(jsonschema)} '$.{col}'"
-            for col, jsonschema in schema["properties"].items()
-        )
+        keys = set(join_keys or [])
+        columns = []
+
+        for col, jsonschema in schema["properties"].items():
+            sql_type = self._openjson_type(jsonschema)
+
+            # Mirror create_empty_table's primary key type adjustment.
+            if (
+                col in keys
+                and self._jsonschema_type_check(jsonschema, ("string",))
+                and isinstance(self.to_sql_type(jsonschema), sqlalchemy.types.VARCHAR)
+            ):
+                sql_type = "VARCHAR(255)"
+
+            columns.append(f"{quote(col)} {sql_type} '$.{col}'")
+
+        return ",\n            ".join(columns)
 
     def insert_from_blob(
         self,
@@ -318,7 +340,7 @@ class MSSQLConnector(SQLConnector):
         quote = self._dialect.identifier_preparer.quote
         properties = schema["properties"]
         col_names = list(properties.keys())
-        with_clause = self._openjson_with_clause(schema)
+        with_clause = self._openjson_with_clause(schema, join_keys)
         ds = self._DATA_SOURCE_NAME
 
         join_condition = " AND ".join(f"_target.{quote(k)} = _src.{quote(k)}" for k in join_keys)

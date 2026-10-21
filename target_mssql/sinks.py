@@ -223,42 +223,202 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         return f"{self.schema_name}.{staging}" if self.schema_name else staging
 
     def _process_batch_via_blob(self, context: dict) -> None:
-        """Blob-stage path: serialise → upload → OPENROWSET load → delete blob."""
+        """Blob-stage path: serialise -> upload -> OPENROWSET load -> delete blob."""
+        import time
+        import logging
+
         from target_mssql.azure_blob import AzureBlobManager
+
+        logger = logging.getLogger("target-mssql")
+        total_start = time.perf_counter()
 
         blob_dict = self.config["azure_blob_storage"]
         path_prefix: str = blob_dict.get("path_prefix", "target-mssql")
         blob_name = f"{path_prefix}/{uuid.uuid4()}/data.json"
-        manager = AzureBlobManager.from_config(config=blob_dict, blob_name=blob_name)
 
-        conformed_records = [self.conform_record(r) for r in context["records"]]
-        join_keys = [self.conform_name(key, "column") for key in self.key_properties]
-        schema = self.conform_schema(self.schema)
+        load_method = self.config.get("load_method", "append-only")
+        stream_name = str(self.full_table_name)
+        input_count = len(context["records"])
 
-        if join_keys:
-            conformed_records = list({frozenset(r[k] for k in join_keys): r for r in conformed_records}.values())
-
-        if not conformed_records:
-            return
-
-        self.connector.prepare_table(
-            full_table_name=self.full_table_name,
-            schema=schema,
-            primary_keys=join_keys,
-            as_temp_table=False,
+        logger.info(
+            "[BATCH] START stream=%s method=%s input_records=%d",
+            stream_name,
+            load_method,
+            input_count,
         )
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tmp:
+        # 1. Initialize Azure Blob Manager
+        start = time.perf_counter()
+
+        manager = AzureBlobManager.from_config(
+            config=blob_dict,
+            blob_name=blob_name,
+        )
+
+        logger.info(
+            "[BATCH] BLOB_MANAGER stream=%s duration=%.3fs",
+            stream_name,
+            time.perf_counter() - start,
+        )
+
+        # 2. Conform records and schema
+        start = time.perf_counter()
+
+        # Build column name mapping once per batch
+        source_records = context["records"]
+        column_name_map = {}
+
+        for record in source_records:
+            for key in record:
+                if key not in column_name_map:
+                    column_name_map[key] = self.conform_name(key)
+
+        # Validate names once per batch
+        self._check_conformed_names_not_duplicated(column_name_map)
+
+        # Apply cached mapping to all records
+        conformed_records = [
+            {
+                column_name_map[key]: value
+                for key, value in record.items()
+            }
+            for record in source_records
+        ]
+
+        join_keys = [
+            self.conform_name(key, "column")
+            for key in self.key_properties
+        ]
+
+        schema = self.conform_schema(self.schema)
+
+        logger.info(
+            "[BATCH] CONFORM stream=%s records=%d duration=%.3fs",
+            stream_name,
+            len(conformed_records),
+            time.perf_counter() - start,
+        )
+
+        # 3. Deduplicate records
+        start = time.perf_counter()
+
+        if join_keys:
+            conformed_records = list(
+                {
+                    frozenset(r[k] for k in join_keys): r
+                    for r in conformed_records
+                }.values()
+            )
+
+        logger.info(
+            "[BATCH] DEDUP stream=%s input=%d output=%d duration=%.3fs",
+            stream_name,
+            input_count,
+            len(conformed_records),
+            time.perf_counter() - start,
+        )
+
+        if not conformed_records:
+            logger.info(
+                "[BATCH] SKIP stream=%s reason=no_records",
+                stream_name,
+            )
+            return
+
+        # 4. Prepare SQL table
+        start = time.perf_counter()
+
+        if not getattr(self, "_table_prepared", False):
+            self.connector.prepare_table(
+                full_table_name=self.full_table_name,
+                schema=schema,
+                primary_keys=join_keys,
+                as_temp_table=False,
+            )
+
+            self._table_prepared = True
+
+            logger.info(
+                "[BATCH] PREPARE_TABLE stream=%s status=executed duration=%.3fs",
+                stream_name,
+                time.perf_counter() - start,
+            )
+        else:
+            logger.info(
+                "[BATCH] PREPARE_TABLE stream=%s status=skipped duration=%.3fs",
+                stream_name,
+                time.perf_counter() - start,
+            )
+
+        # 5. Serialize records to JSON
+        start = time.perf_counter()
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".json",
+            delete=False,
+            encoding="utf-8",
+        ) as tmp:
             json.dump(conformed_records, tmp, default=str)
             tmp_path = tmp.name
+
+        json_size_mb = Path(tmp_path).stat().st_size / (1024 * 1024)
+
+        logger.info(
+            "[BATCH] JSON_SERIALIZE stream=%s size_mb=%.2f duration=%.3fs",
+            stream_name,
+            json_size_mb,
+            time.perf_counter() - start,
+        )
+
+        # 6. Upload JSON to Azure Blob
+        start = time.perf_counter()
+
         try:
             manager.upload_file(tmp_path)
+
+            logger.info(
+                "[BATCH] BLOB_UPLOAD stream=%s size_mb=%.2f duration=%.3fs",
+                stream_name,
+                json_size_mb,
+                time.perf_counter() - start,
+            )
+
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
+        # 7. Open SQL connection and execute INSERT/MERGE
+        start_connection = time.perf_counter()
+
         with self.connector._engine.connect() as connection:
+
+            logger.info(
+                "[BATCH] SQL_CONNECT stream=%s duration=%.3fs",
+                stream_name,
+                time.perf_counter() - start_connection,
+            )
+
             try:
-                if join_keys:
+                start_sql = time.perf_counter()
+
+                if load_method == "append-only":
+
+                    written = self.connector.insert_from_blob(
+                        connection=connection,
+                        full_table_name=self.full_table_name,
+                        schema=schema,
+                        blob_path=blob_name,
+                    )
+
+                    operation = "INSERT"
+
+                elif load_method == "upsert":
+
+                    if not join_keys:
+                        raise ValueError(
+                            f"Upsert requires primary keys for {self.full_table_name}"
+                        )
+
                     written = self.connector.merge_upsert_from_blob(
                         connection=connection,
                         full_table_name=self.full_table_name,
@@ -266,18 +426,45 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                         blob_path=blob_name,
                         join_keys=join_keys,
                     )
-                else:
-                    written = self.connector.insert_from_blob(
-                        connection=connection,
-                        full_table_name=self.full_table_name,
-                        schema=schema,
-                        blob_path=blob_name,
-                    )
-            finally:
-                manager.delete_blob()
 
+                    operation = "MERGE"
+
+                else:
+                    raise ValueError(
+                        f"Unsupported blob load_method: {load_method}"
+                    )
+
+                logger.info(
+                    "[BATCH] SQL_%s stream=%s written=%d duration=%.3fs",
+                    operation,
+                    stream_name,
+                    written,
+                    time.perf_counter() - start_sql,
+                )
+
+            finally:
+                # 8. Delete staged Blob
+                start_delete = time.perf_counter()
+
+                try:
+                    manager.delete_blob()
+                finally:
+                    logger.info(
+                        "[BATCH] BLOB_DELETE stream=%s duration=%.3fs",
+                        stream_name,
+                        time.perf_counter() - start_delete,
+                    )
+
+        # 9. Update record metric
         self.record_counter_metric.increment_written(written)
 
+        logger.info(
+            "[BATCH] TOTAL stream=%s records=%d written=%d duration=%.3fs",
+            stream_name,
+            len(conformed_records),
+            written,
+            time.perf_counter() - total_start,
+        )
     def _open_native_connection(self) -> mssql_python.Connection:
         """Open a dedicated mssql-python connection, used only for Arrow bulk-copy.
 
