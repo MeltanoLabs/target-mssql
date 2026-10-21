@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import sys
+from contextvars import ContextVar
+from copy import deepcopy
+from dataclasses import dataclass
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
@@ -19,6 +22,16 @@ if TYPE_CHECKING:
 
     from singer_sdk.sql.connector import FullyQualifiedName
     from sqlalchemy.engine import Connection
+
+
+@dataclass(eq=False)
+class _ColumnCache:
+    connector: SQLConnector
+    table: str
+    columns: dict[str, sqlalchemy.Column] | None = None
+
+
+_column_cache_scopes: ContextVar[tuple[_ColumnCache, ...]] = ContextVar("column_cache_scopes", default=())
 
 
 class MSSQLConnector(SQLConnector):
@@ -49,12 +62,27 @@ class MSSQLConnector(SQLConnector):
 
     @override
     def prepare_table(self, full_table_name: str | FullyQualifiedName, *args: Any, **kwargs: Any) -> None:
-        """Log each table check, including calls made for subsequent batches."""
+        """Reuse reflected columns only within this preparation, until DDL runs."""
         self.logger.info("[TIMING] table=%s method=prepare_table started", full_table_name)
         start = perf_counter()
+        cache = _ColumnCache(self, str(full_table_name))
+        token = _column_cache_scopes.set((*_column_cache_scopes.get(), cache))
+
+        def invalidate_before_ddl(conn, cursor, statement, parameters, context, executemany):
+            # Invalidate enclosing scopes too: nested preparation can change their table.
+            # Other execution contexts on the same engine retain their own snapshots.
+            if context.isddl and cache in _column_cache_scopes.get():
+                cache.columns = None
+
         try:
-            return super().prepare_table(full_table_name, *args, **kwargs)
+            engine = self._engine
+            sqlalchemy.event.listen(engine, "before_cursor_execute", invalidate_before_ddl)
+            try:
+                return super().prepare_table(full_table_name, *args, **kwargs)
+            finally:
+                sqlalchemy.event.remove(engine, "before_cursor_execute", invalidate_before_ddl)
         finally:
+            _column_cache_scopes.reset(token)
             self.logger.info(
                 "[TIMING] table=%s method=prepare_table elapsed=%.3fs",
                 full_table_name,
@@ -91,15 +119,33 @@ class MSSQLConnector(SQLConnector):
         full_table_name: str | FullyQualifiedName,
         column_names: list[str] | None = None,
     ) -> dict[str, sqlalchemy.Column]:
-        """Log each metadata read without changing the returned columns."""
-        self.logger.info("[TIMING] table=%s method=get_table_columns started", full_table_name)
+        """Return independent columns from the current scope or fresh reflection."""
+        scopes = _column_cache_scopes.get()
+        cache = scopes[-1] if scopes else None
+        if cache is not None and (cache.connector is not self or cache.table != str(full_table_name)):
+            cache = None
+        cache_status = "disabled" if cache is None else ("miss" if cache.columns is None else "hit")
+        self.logger.info(
+            "[TIMING] table=%s method=get_table_columns cache=%s started", full_table_name, cache_status
+        )
         start = perf_counter()
         try:
-            return super().get_table_columns(full_table_name, column_names)
+            if cache is None:
+                return super().get_table_columns(full_table_name, column_names)
+            if cache.columns is None:
+                cache.columns = super().get_table_columns(full_table_name)
+            selected = {name.casefold() for name in column_names} if column_names else None
+            # SDK type adaptation mutates collation; never expose the cached objects.
+            return {
+                name: deepcopy(column)
+                for name, column in cache.columns.items()
+                if selected is None or name.casefold() in selected
+            }
         finally:
             self.logger.info(
-                "[TIMING] table=%s method=get_table_columns elapsed=%.3fs",
+                "[TIMING] table=%s method=get_table_columns cache=%s elapsed=%.3fs",
                 full_table_name,
+                cache_status,
                 perf_counter() - start,
             )
 
