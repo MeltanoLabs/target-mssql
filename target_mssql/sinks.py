@@ -8,7 +8,6 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
-from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote, urlparse
 
@@ -75,21 +74,21 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self._table_prepared = False
         self._staging_prepared = False
 
     @override
     def setup(self) -> None:
-        """Log the total setup time, including schema and table preparation."""
-        self.logger.info("[TIMING] stream=%s method=setup started", self.stream_name)
-        start = perf_counter()
-        try:
-            super().setup()
-        finally:
-            self.logger.info(
-                "[TIMING] stream=%s method=setup elapsed=%.3fs",
-                self.stream_name,
-                perf_counter() - start,
-            )
+        """Prepare the destination once for this sink's schema and keys."""
+        if self._table_prepared:
+            return
+        super().setup()
+        self._table_prepared = True
+
+    def _ensure_table_prepared(self) -> None:
+        """Also support batches processed without prior target registration."""
+        if not self._table_prepared:
+            self.setup()
 
     @override
     def get_sink_record_counter(self) -> _WriteOnlyRecordCounter:
@@ -343,15 +342,8 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         # 4. Prepare SQL table
         start = time.perf_counter()
 
-        if not getattr(self, "_table_prepared", False):
-            self.connector.prepare_table(
-                full_table_name=self.full_table_name,
-                schema=schema,
-                primary_keys=join_keys,
-                as_temp_table=False,
-            )
-
-            self._table_prepared = True
+        if not self._table_prepared:
+            self._ensure_table_prepared()
 
             logger.info(
                 "[BATCH] PREPARE_TABLE stream=%s status=executed duration=%.3fs",
@@ -538,12 +530,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         if table.num_rows == 0:
             return
 
-        self.connector.prepare_table(
-            full_table_name=self.full_table_name,
-            schema=schema,
-            primary_keys=join_keys,
-            as_temp_table=False,
-        )
+        self._ensure_table_prepared()
 
         with self._open_native_connection() as conn, conn.cursor() as cursor:
             if join_keys:
@@ -577,6 +564,8 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
             self._process_batch_via_blob(context)
             return
 
+        self._ensure_table_prepared()
+
         conformed_records = (self.conform_record(record) for record in context["records"])
 
         join_keys = [self.conform_name(key, "column") for key in self.key_properties]
@@ -587,14 +576,6 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
             if self.key_properties:
                 deduped_records = list(
                     {frozenset(record[k] for k in self.key_properties): record for record in conformed_records}.values()
-                )
-
-                self.logger.info(f"Preparing table {self.full_table_name}")
-                self.connector.prepare_table(
-                    full_table_name=self.full_table_name,
-                    schema=schema,
-                    primary_keys=join_keys,
-                    as_temp_table=False,
                 )
 
                 staging = self.staging_full_table_name

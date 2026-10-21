@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 import sqlalchemy.engine.url
@@ -263,33 +262,13 @@ class TargetMSSQL(SQLTarget):
         if prefix := self.config.get("table_prefix"):
             stream_name = f"{prefix}{stream_name}"
 
-        self.logger.info("[TIMING] stream=%s method=MSSQLConnector.__init__ started", stream_name)
-        start = perf_counter()
-        try:
-            connector = MSSQLConnector(self.config, sqlalchemy_url=self.url)
-        finally:
-            self.logger.info(
-                "[TIMING] stream=%s method=MSSQLConnector.__init__ elapsed=%.3fs",
-                stream_name,
-                perf_counter() - start,
-            )
-
-        self.logger.info("[TIMING] stream=%s method=MSSQLSink.__init__ started", stream_name)
-        start = perf_counter()
-        try:
-            return MSSQLSink(
-                target=self,
-                stream_name=stream_name,
-                schema=schema,
-                key_properties=key_properties,
-                connector=connector,
-            )
-        finally:
-            self.logger.info(
-                "[TIMING] stream=%s method=MSSQLSink.__init__ elapsed=%.3fs",
-                stream_name,
-                perf_counter() - start,
-            )
+        return MSSQLSink(
+            target=self,
+            stream_name=stream_name,
+            schema=schema,
+            key_properties=key_properties,
+            connector=MSSQLConnector(self.config, sqlalchemy_url=self.url),
+        )
 
 
 if __name__ == "__main__":

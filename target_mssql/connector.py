@@ -47,23 +47,8 @@ class MSSQLConnector(SQLConnector):
     allow_temp_tables: bool = True  # Whether temp tables are supported.
 
     @override
-    def prepare_schema(self, schema_name: str) -> None:
-        """Log the time spent checking or creating the SQL schema."""
-        self.logger.info("[TIMING] schema=%s method=prepare_schema started", schema_name)
-        start = perf_counter()
-        try:
-            return super().prepare_schema(schema_name)
-        finally:
-            self.logger.info(
-                "[TIMING] schema=%s method=prepare_schema elapsed=%.3fs",
-                schema_name,
-                perf_counter() - start,
-            )
-
-    @override
     def prepare_table(self, full_table_name: str | FullyQualifiedName, *args: Any, **kwargs: Any) -> None:
         """Reuse reflected columns only within this preparation, until DDL runs."""
-        self.logger.info("[TIMING] table=%s method=prepare_table started", full_table_name)
         start = perf_counter()
         cache = _ColumnCache(self, str(full_table_name))
         token = _column_cache_scopes.set((*_column_cache_scopes.get(), cache))
@@ -90,30 +75,6 @@ class MSSQLConnector(SQLConnector):
             )
 
     @override
-    def prepare_column(
-        self,
-        full_table_name: str | FullyQualifiedName,
-        column_name: str,
-        sql_type: sqlalchemy.types.TypeEngine,
-    ) -> None:
-        """Log column preparation, including nested metadata reads."""
-        self.logger.info(
-            "[TIMING] table=%s column=%s method=prepare_column started",
-            full_table_name,
-            column_name,
-        )
-        start = perf_counter()
-        try:
-            return super().prepare_column(full_table_name, column_name, sql_type)
-        finally:
-            self.logger.info(
-                "[TIMING] table=%s column=%s method=prepare_column elapsed=%.3fs",
-                full_table_name,
-                column_name,
-                perf_counter() - start,
-            )
-
-    @override
     def get_table_columns(
         self,
         full_table_name: str | FullyQualifiedName,
@@ -124,30 +85,17 @@ class MSSQLConnector(SQLConnector):
         cache = scopes[-1] if scopes else None
         if cache is not None and (cache.connector is not self or cache.table != str(full_table_name)):
             cache = None
-        cache_status = "disabled" if cache is None else ("miss" if cache.columns is None else "hit")
-        self.logger.info(
-            "[TIMING] table=%s method=get_table_columns cache=%s started", full_table_name, cache_status
-        )
-        start = perf_counter()
-        try:
-            if cache is None:
-                return super().get_table_columns(full_table_name, column_names)
-            if cache.columns is None:
-                cache.columns = super().get_table_columns(full_table_name)
-            selected = {name.casefold() for name in column_names} if column_names else None
-            # SDK type adaptation mutates collation; never expose the cached objects.
-            return {
-                name: deepcopy(column)
-                for name, column in cache.columns.items()
-                if selected is None or name.casefold() in selected
-            }
-        finally:
-            self.logger.info(
-                "[TIMING] table=%s method=get_table_columns cache=%s elapsed=%.3fs",
-                full_table_name,
-                cache_status,
-                perf_counter() - start,
-            )
+        if cache is None:
+            return super().get_table_columns(full_table_name, column_names)
+        if cache.columns is None:
+            cache.columns = super().get_table_columns(full_table_name)
+        selected = {name.casefold() for name in column_names} if column_names else None
+        # SDK type adaptation mutates collation; never expose the cached objects.
+        return {
+            name: deepcopy(column)
+            for name, column in cache.columns.items()
+            if selected is None or name.casefold() in selected
+        }
 
     @override
     def create_schema(self, schema_name: str):
