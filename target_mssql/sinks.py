@@ -238,8 +238,8 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
     def _process_batch_via_blob(self, context: dict) -> None:
         """Blob-stage path: serialise -> upload -> OPENROWSET load -> delete blob."""
-        import time
         import logging
+        import time
 
         from target_mssql.azure_blob import AzureBlobManager
 
@@ -292,17 +292,10 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
 
         # Apply cached mapping to all records
         conformed_records = [
-            {
-                column_name_map[key]: value
-                for key, value in record.items()
-            }
-            for record in source_records
+            {column_name_map[key]: value for key, value in record.items()} for record in source_records
         ]
 
-        join_keys = [
-            self.conform_name(key, "column")
-            for key in self.key_properties
-        ]
+        join_keys = [self.conform_name(key, "column") for key in self.key_properties]
 
         schema = self.conform_schema(self.schema)
 
@@ -317,12 +310,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         start = time.perf_counter()
 
         if join_keys:
-            conformed_records = list(
-                {
-                    frozenset(r[k] for k in join_keys): r
-                    for r in conformed_records
-                }.values()
-            )
+            conformed_records = list({frozenset(r[k] for k in join_keys): r for r in conformed_records}.values())
 
         logger.info(
             "[BATCH] DEDUP stream=%s input=%d output=%d duration=%.3fs",
@@ -398,7 +386,6 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         start_connection = time.perf_counter()
 
         with self.connector._engine.connect() as connection:
-
             logger.info(
                 "[BATCH] SQL_CONNECT stream=%s duration=%.3fs",
                 stream_name,
@@ -409,7 +396,6 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                 start_sql = time.perf_counter()
 
                 if load_method == "append-only":
-
                     written = self.connector.insert_from_blob(
                         connection=connection,
                         full_table_name=self.full_table_name,
@@ -420,11 +406,8 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                     operation = "INSERT"
 
                 elif load_method == "upsert":
-
                     if not join_keys:
-                        raise ValueError(
-                            f"Upsert requires primary keys for {self.full_table_name}"
-                        )
+                        raise ValueError(f"Upsert requires primary keys for {self.full_table_name}")
 
                     written = self.connector.merge_upsert_from_blob(
                         connection=connection,
@@ -437,9 +420,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                     operation = "MERGE"
 
                 else:
-                    raise ValueError(
-                        f"Unsupported blob load_method: {load_method}"
-                    )
+                    raise ValueError(f"Unsupported blob load_method: {load_method}")
 
                 logger.info(
                     "[BATCH] SQL_%s stream=%s written=%d duration=%.3fs",
@@ -472,6 +453,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
             written,
             time.perf_counter() - total_start,
         )
+
     def _open_native_connection(self) -> mssql_python.Connection:
         """Open a dedicated mssql-python connection, used only for Arrow bulk-copy.
 
