@@ -62,6 +62,48 @@ class MSSQLConnector(SQLConnector):
             )
 
     @override
+    def prepare_column(
+        self,
+        full_table_name: str | FullyQualifiedName,
+        column_name: str,
+        sql_type: sqlalchemy.types.TypeEngine,
+    ) -> None:
+        """Log column preparation, including nested metadata reads."""
+        self.logger.info(
+            "[TIMING] table=%s column=%s method=prepare_column started",
+            full_table_name,
+            column_name,
+        )
+        start = perf_counter()
+        try:
+            return super().prepare_column(full_table_name, column_name, sql_type)
+        finally:
+            self.logger.info(
+                "[TIMING] table=%s column=%s method=prepare_column elapsed=%.3fs",
+                full_table_name,
+                column_name,
+                perf_counter() - start,
+            )
+
+    @override
+    def get_table_columns(
+        self,
+        full_table_name: str | FullyQualifiedName,
+        column_names: list[str] | None = None,
+    ) -> dict[str, sqlalchemy.Column]:
+        """Log each metadata read without changing the returned columns."""
+        self.logger.info("[TIMING] table=%s method=get_table_columns started", full_table_name)
+        start = perf_counter()
+        try:
+            return super().get_table_columns(full_table_name, column_names)
+        finally:
+            self.logger.info(
+                "[TIMING] table=%s method=get_table_columns elapsed=%.3fs",
+                full_table_name,
+                perf_counter() - start,
+            )
+
+    @override
     def create_schema(self, schema_name: str):
         with self._connect() as conn, conn.begin():
             conn.exec_driver_sql(f"CREATE SCHEMA {schema_name}")
