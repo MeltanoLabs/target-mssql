@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlalchemy
@@ -36,6 +37,32 @@ class MSSQLConnector(SQLConnector):
     def create_schema(self, schema_name: str):
         with self._connect() as conn, conn.begin():
             conn.exec_driver_sql(f"CREATE SCHEMA {schema_name}")
+
+    @cached_property
+    def key_collation(self) -> str:
+        """The database collation made case-sensitive, for text key columns.
+
+        The default collation ignores case, so two keys that the source keeps apart, such as
+        `/a` and `/A`, would otherwise collide in the primary key.
+        """
+        with self._connect() as conn:
+            collation = conn.exec_driver_sql(
+                "SELECT CONVERT(varchar(128), DATABASEPROPERTYEX(DB_NAME(), 'Collation'))"
+            ).scalar()
+        return collation.replace("_CI_", "_CS_")
+
+    def key_collate_clauses(self, full_table_name: str | FullyQualifiedName, join_keys: list[str]) -> dict[str, str]:
+        """Return a `COLLATE` clause for each key column, to compare keys as the table stores them.
+
+        A staging column uses the database collation, and SQL Server rejects a comparison between
+        two columns with different collations. A table created before key columns became
+        case-sensitive keeps comparing without case.
+        """
+        columns = self.get_table_columns(full_table_name, join_keys)
+        return {
+            name: f" COLLATE {column.type.collation}" if getattr(column.type, "collation", None) else ""
+            for name, column in columns.items()
+        }
 
     @override
     def create_empty_table(
@@ -80,7 +107,7 @@ class MSSQLConnector(SQLConnector):
             # A key cannot use VARCHAR(MAX), and SQL Server rejects a row only when its key
             # values exceed 900 bytes together, so each text key column can take the whole limit.
             if isinstance(columntype, sqlalchemy.types.VARCHAR) and is_primary_key:
-                columntype = sqlalchemy.types.VARCHAR(900)
+                columntype = sqlalchemy.types.VARCHAR(900, collation=self.key_collation)
 
             if is_primary_key:
                 columns.append(sqlalchemy.Column(property_name, columntype, primary_key=True, autoincrement=False))
@@ -322,7 +349,8 @@ class MSSQLConnector(SQLConnector):
         with_clause = self._openjson_with_clause(schema)
         ds = self._DATA_SOURCE_NAME
 
-        join_condition = " AND ".join(f"_target.{quote(k)} = _src.{quote(k)}" for k in join_keys)
+        collate = self.key_collate_clauses(full_table_name, join_keys)
+        join_condition = " AND ".join(f"_target.{quote(k)} = _src.{quote(k)}{collate[k]}" for k in join_keys)
         update_cols = [c for c in col_names if c not in join_keys]
         matched_clause = (
             "WHEN MATCHED THEN UPDATE SET " + ", ".join(f"_target.{quote(c)} = _src.{quote(c)}" for c in update_cols)

@@ -524,3 +524,44 @@ def test_param_limit(mssql_pyodbc_config):
     target = TargetMSSQL(config=mssql_pyodbc_config)
     buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, *records]))
     target.listen(buf)
+
+
+def _load_and_select(mssql_config, stream, key_properties, records, columns):
+    schema = {
+        "type": "SCHEMA",
+        "stream": stream,
+        "schema": {"properties": {"id": {"type": "string"}, "value": {"type": "integer"}}},
+        "key_properties": key_properties,
+    }
+    messages = [schema, *({"type": "RECORD", "stream": stream, "record": r} for r in records)]
+    target = TargetMSSQL(config=mssql_config)
+    target.listen(io.StringIO("\n".join(json.dumps(m) for m in messages)))
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=key_properties).connector
+    with connector._engine.connect() as connection:
+        return connection.exec_driver_sql(
+            f"SELECT {columns} FROM {mssql_config['table_prefix']}{stream}"  # noqa: S608
+        ).fetchall()
+
+
+def test_keys_that_differ_in_case(mssql_config):
+    """Keys that differ only in case are separate rows, as they are in the source."""
+    stream = f"key_case_test_{uuid.uuid4().hex[:8]}"
+    records = [{"id": "/pricingCalculator", "value": 1}, {"id": "/pricingcalculator", "value": 2}]
+    rows = _load_and_select(mssql_config, stream, ["id"], records, "id, value")
+    assert sorted(tuple(r) for r in rows) == [("/pricingCalculator", 1), ("/pricingcalculator", 2)]
+
+
+def test_existing_case_insensitive_key(mssql_config):
+    """A table created with a case-insensitive key still updates a row whose key differs only in case."""
+    stream = f"existing_key_test_{uuid.uuid4().hex[:8]}"
+    sink = TargetMSSQL(config=mssql_config).create_sink(
+        stream_name=stream, schema={"properties": {}}, key_properties=[]
+    )
+    with sink.connector._engine.connect() as connection, connection.begin():
+        connection.exec_driver_sql(
+            f"CREATE TABLE {mssql_config['table_prefix']}{stream} (id VARCHAR(255) PRIMARY KEY, value BIGINT)"
+        )
+    _load_and_select(mssql_config, stream, ["id"], [{"id": "/pricingCalculator", "value": 1}], "id")
+    rows = _load_and_select(mssql_config, stream, ["id"], [{"id": "/pricingcalculator", "value": 2}], "id, value")
+    assert [tuple(r) for r in rows] == [("/pricingCalculator", 2)]
