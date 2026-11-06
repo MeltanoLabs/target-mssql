@@ -77,9 +77,10 @@ class MSSQLConnector(SQLConnector):
 
             columntype = self.to_sql_type(property_jsonschema)
 
-            # In MSSQL, Primary keys can not be more than 900 bytes. Setting at 255
+            # A key cannot use VARCHAR(MAX), and SQL Server rejects a row only when its key
+            # values exceed 900 bytes together, so each text key column can take the whole limit.
             if isinstance(columntype, sqlalchemy.types.VARCHAR) and is_primary_key:
-                columntype = sqlalchemy.types.VARCHAR(255)
+                columntype = sqlalchemy.types.VARCHAR(900)
 
             if is_primary_key:
                 columns.append(sqlalchemy.Column(property_name, columntype, primary_key=True, autoincrement=False))
