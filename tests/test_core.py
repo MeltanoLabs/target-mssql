@@ -492,6 +492,59 @@ def test_arrow_batch_naive_timestamp(mssql_config, tmp_path):
     ]
 
 
+def _arrow_batch_sdc_schema(stream: str) -> dict:
+    return {
+        "type": "SCHEMA",
+        "stream": stream,
+        "schema": {"properties": {"id": {"type": "integer"}}},
+        "key_properties": ["id"],
+    }
+
+
+def test_arrow_batch_sdc_metadata(mssql_config, tmp_path):
+    """An Arrow batch gets the target-side `_sdc_` values that a `RECORD` message gets."""
+    stream = f"arrow_sdc_test_{uuid.uuid4().hex[:8]}"
+    schema = _arrow_batch_sdc_schema(stream)
+    arrow_path = _write_arrow_ipc_file(
+        tmp_path,
+        "sdc.arrow",
+        {"id": pa.array([1, 2], type=pa.int64()), "_sdc_sequence": pa.array([7, 8], type=pa.int64())},
+    )
+
+    target = TargetMSSQL(config={**mssql_config, "trust_server_certificate": True, "add_record_metadata": True})
+    buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, _arrow_batch_message(stream, arrow_path)]))
+    target.listen(buf)
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=["id"]).connector
+    full_table_name = f"{mssql_config['table_prefix']}{stream}"
+    with connector._engine.connect() as connection:
+        rows = connection.exec_driver_sql(
+            "SELECT id, _sdc_sequence, _sdc_sync_started_at, _sdc_received_at, _sdc_batched_at "  # noqa: S608
+            f"FROM {full_table_name} ORDER BY id"
+        ).fetchall()
+    assert [(r[0], r[1], r[2], r[3] is not None, r[4]) for r in rows] == [
+        (1, 7, target.initialized_at, True, None),
+        (2, 8, target.initialized_at, True, None),
+    ]
+
+
+def test_arrow_batch_without_sdc_metadata(mssql_config, tmp_path):
+    """An Arrow batch gets no `_sdc_` columns when `add_record_metadata` is off."""
+    stream = f"arrow_no_sdc_test_{uuid.uuid4().hex[:8]}"
+    schema = _arrow_batch_sdc_schema(stream)
+    arrow_path = _write_arrow_ipc_file(tmp_path, "no_sdc.arrow", {"id": pa.array([1], type=pa.int64())})
+
+    target = TargetMSSQL(config={**mssql_config, "trust_server_certificate": True})
+    buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, _arrow_batch_message(stream, arrow_path)]))
+    target.listen(buf)
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=["id"]).connector
+    full_table_name = f"{mssql_config['table_prefix']}{stream}"
+    with connector._engine.connect() as connection:
+        columns = connection.exec_driver_sql(f"SELECT * FROM {full_table_name}").keys()  # noqa: S608
+    assert list(columns) == ["id"]
+
+
 def test_param_limit(mssql_pyodbc_config):
     """pyodbc sends true ODBC bound parameters, so SQL Server's 2100-parameter limit
     applies. With 14 columns the old formula (2100 // 14 = 150) produced exactly 2100
