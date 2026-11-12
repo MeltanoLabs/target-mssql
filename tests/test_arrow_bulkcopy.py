@@ -39,7 +39,7 @@ def test_connect_kwargs_from_url_no_port():
     assert kwargs["Server"] == "myhost"
 
 
-PAYLOAD = '{"route": "Guardian", "score": 1.5}'
+PAYLOAD = '{"route":"Guardian","score":1.5}'
 
 
 @pytest.mark.parametrize(
@@ -53,8 +53,8 @@ PAYLOAD = '{"route": "Guardian", "score": 1.5}'
             id="struct-field",
         ),
         pytest.param(
-            pa.ListArray.from_arrays([0, 2], pa.array([PAYLOAD, "[1, 2]"], type=pa.json_())),
-            f"[{PAYLOAD}, [1, 2]]",
+            pa.ListArray.from_arrays([0, 2], pa.array([PAYLOAD, "[1,2]"], type=pa.json_())),
+            f"[{PAYLOAD},[1,2]]",
             "array",
             id="list-items",
         ),
@@ -72,5 +72,5 @@ def test_arrow_json_matches_record(arrow_values, record_value, property_type):
     )
     record = sink.preprocess_record({"col": deserialize_json(record_value)}, {})
 
-    assert table.column("col").to_pylist() == [record["col"]]
-    assert deserialize_json(record["col"]) == deserialize_json(record_value)
+    [stored] = table.column("col").to_pylist()
+    assert deserialize_json(stored) == deserialize_json(record["col"]) == deserialize_json(record_value)

@@ -19,7 +19,6 @@ import pyarrow.compute as pc
 import simplejson
 import sqlalchemy.engine.url
 from singer_sdk.helpers._typing import get_datelike_property_type
-from singer_sdk.singerlib.json import deserialize_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,37 +52,38 @@ def connect_kwargs_from_url(url: str, *, trust_server_certificate: bool = False)
     return kwargs
 
 
-def _decode_json(value: str | None) -> Any:  # noqa: ANN401
-    return None if value is None else deserialize_json(value)
+def _raw_json(value: str | None) -> simplejson.RawJSON | None:
+    return None if value is None else simplejson.RawJSON(value)
 
 
-def _json_decoder(arrow_type: pa.DataType) -> Callable[[Any], Any] | None:
-    """Build a function that decodes the `arrow.json` values in Python data of this type.
+def _raw_json_wrapper(arrow_type: pa.DataType) -> Callable[[Any], Any] | None:
+    """Build a function that marks the `arrow.json` values in Python data of this type as raw JSON.
 
-    `to_pylist()` returns an `arrow.json` value as its JSON text, at any depth. Returns
-    `None` if the type holds no `arrow.json` values.
+    `to_pylist()` returns an `arrow.json` value as its JSON text, at any depth.
+    The `simplejson` encoder then writes that text as it is, with no decode and re-encode.
+    Returns `None` if the type holds no `arrow.json` values.
     """
     if isinstance(arrow_type, pa.BaseExtensionType) and arrow_type.extension_name == "arrow.json":
-        return _decode_json
+        return _raw_json
 
     if pa.types.is_struct(arrow_type):
-        decoders = {field.name: decoder for field in arrow_type if (decoder := _json_decoder(field.type)) is not None}
-        if not decoders:
+        wrappers = {field.name: wrap for field in arrow_type if (wrap := _raw_json_wrapper(field.type)) is not None}
+        if not wrappers:
             return None
 
-        def decode_struct(value: dict | None) -> dict | None:
+        def wrap_struct(value: dict | None) -> dict | None:
             if value is not None:
-                for name, decode in decoders.items():
-                    value[name] = decode(value[name])
+                for name, wrap in wrappers.items():
+                    value[name] = wrap(value[name])
             return value
 
-        return decode_struct
+        return wrap_struct
 
     if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type) or pa.types.is_fixed_size_list(arrow_type):
-        decode_item = _json_decoder(arrow_type.value_type)
-        if decode_item is None:
+        wrap_item = _raw_json_wrapper(arrow_type.value_type)
+        if wrap_item is None:
             return None
-        return lambda value: None if value is None else [decode_item(item) for item in value]
+        return lambda value: None if value is None else [wrap_item(item) for item in value]
 
     return None
 
@@ -104,8 +104,8 @@ def _conform_column(
         property_jsonschema, ("array",)
     ):
         values = column.to_pylist()
-        if decode := _json_decoder(column.type):
-            values = [decode(v) for v in values]
+        if wrap := _raw_json_wrapper(column.type):
+            values = [wrap(v) for v in values]
         return pa.array([None if v is None else JSON_ENCODER.encode(v) for v in values], type=pa.string())
 
     if connector._jsonschema_type_check(property_jsonschema, ("boolean",)):
