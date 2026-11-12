@@ -11,12 +11,12 @@ of what the rest of the target is configured to use.
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
+import simplejson
 import sqlalchemy.engine.url
 from singer_sdk.helpers._typing import get_datelike_property_type
 from singer_sdk.singerlib.json import deserialize_json
@@ -27,6 +27,9 @@ if TYPE_CHECKING:
     import mssql_python
 
     from target_mssql.connector import MSSQLConnector
+
+# `simplejson.dumps` builds a new encoder on each call that passes an option.
+JSON_ENCODER = simplejson.JSONEncoder(default=str)
 
 
 def connect_kwargs_from_url(url: str, *, trust_server_certificate: bool = False) -> dict[str, Any]:
@@ -93,7 +96,7 @@ def _conform_column(
     """Coerce one Arrow column to match the SQL type already decided for it.
 
     No new type inference happens here: object/array columns become JSON strings
-    (matching `MSSQLSink.preprocess_record`'s `json.dumps`), booleans become "1"/"0"
+    (matching `MSSQLSink.preprocess_record`'s `JSON_ENCODER`), booleans become "1"/"0"
     strings (matching `MSSQLConnector.to_sql_type`'s VARCHAR(1) mapping), and NUL bytes
     are stripped from plain strings (matching `preprocess_record`'s NUL-stripping).
     """
@@ -103,7 +106,7 @@ def _conform_column(
         values = column.to_pylist()
         if decode := _json_decoder(column.type):
             values = [decode(v) for v in values]
-        return pa.array([None if v is None else json.dumps(v, default=str) for v in values], type=pa.string())
+        return pa.array([None if v is None else JSON_ENCODER.encode(v) for v in values], type=pa.string())
 
     if connector._jsonschema_type_check(property_jsonschema, ("boolean",)):
         bool_array = column if pa.types.is_boolean(column.type) else column.cast(pa.bool_())

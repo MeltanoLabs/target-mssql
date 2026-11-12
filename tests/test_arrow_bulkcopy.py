@@ -73,3 +73,4 @@ def test_arrow_json_matches_record(arrow_values, record_value, property_type):
     record = sink.preprocess_record({"col": deserialize_json(record_value)}, {})
 
     assert table.column("col").to_pylist() == [record["col"]]
+    assert deserialize_json(record["col"]) == deserialize_json(record_value)
