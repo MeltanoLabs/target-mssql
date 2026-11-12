@@ -11,12 +11,12 @@ of what the rest of the target is configured to use.
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
+import simplejson
 import sqlalchemy.engine.url
 from singer_sdk.helpers._typing import get_datelike_property_type
 
@@ -26,6 +26,9 @@ if TYPE_CHECKING:
     import mssql_python
 
     from target_mssql.connector import MSSQLConnector
+
+# `simplejson.dumps` builds a new encoder on each call that passes an option.
+JSON_ENCODER = simplejson.JSONEncoder(default=str)
 
 
 def connect_kwargs_from_url(url: str, *, trust_server_certificate: bool = False) -> dict[str, Any]:
@@ -49,6 +52,42 @@ def connect_kwargs_from_url(url: str, *, trust_server_certificate: bool = False)
     return kwargs
 
 
+def _raw_json(value: str | None) -> simplejson.RawJSON | None:
+    return None if value is None else simplejson.RawJSON(value)
+
+
+def _raw_json_wrapper(arrow_type: pa.DataType) -> Callable[[Any], Any] | None:
+    """Build a function that marks the `arrow.json` values in Python data of this type as raw JSON.
+
+    `to_pylist()` returns an `arrow.json` value as its JSON text, at any depth.
+    The `simplejson` encoder then writes that text as it is, with no decode and re-encode.
+    Returns `None` if the type holds no `arrow.json` values.
+    """
+    if isinstance(arrow_type, pa.BaseExtensionType) and arrow_type.extension_name == "arrow.json":
+        return _raw_json
+
+    if pa.types.is_struct(arrow_type):
+        wrappers = {field.name: wrap for field in arrow_type if (wrap := _raw_json_wrapper(field.type)) is not None}
+        if not wrappers:
+            return None
+
+        def wrap_struct(value: dict | None) -> dict | None:
+            if value is not None:
+                for name, wrap in wrappers.items():
+                    value[name] = wrap(value[name])
+            return value
+
+        return wrap_struct
+
+    if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type) or pa.types.is_fixed_size_list(arrow_type):
+        wrap_item = _raw_json_wrapper(arrow_type.value_type)
+        if wrap_item is None:
+            return None
+        return lambda value: None if value is None else [wrap_item(item) for item in value]
+
+    return None
+
+
 def _conform_column(
     column: pa.ChunkedArray,
     property_jsonschema: dict,
@@ -57,15 +96,17 @@ def _conform_column(
     """Coerce one Arrow column to match the SQL type already decided for it.
 
     No new type inference happens here: object/array columns become JSON strings
-    (matching `MSSQLSink.preprocess_record`'s `json.dumps`), booleans become "1"/"0"
+    (matching `MSSQLSink.preprocess_record`'s `JSON_ENCODER`), booleans become "1"/"0"
     strings (matching `MSSQLConnector.to_sql_type`'s VARCHAR(1) mapping), and NUL bytes
     are stripped from plain strings (matching `preprocess_record`'s NUL-stripping).
     """
     if connector._jsonschema_type_check(property_jsonschema, ("object",)) or connector._jsonschema_type_check(
         property_jsonschema, ("array",)
     ):
-        values = [None if v is None else json.dumps(v, default=str) for v in column.to_pylist()]
-        return pa.array(values, type=pa.string())
+        values = column.to_pylist()
+        if wrap := _raw_json_wrapper(column.type):
+            values = [wrap(v) for v in values]
+        return pa.array([None if v is None else JSON_ENCODER.encode(v) for v in values], type=pa.string())
 
     if connector._jsonschema_type_check(property_jsonschema, ("boolean",)):
         bool_array = column if pa.types.is_boolean(column.type) else column.cast(pa.bool_())
