@@ -492,6 +492,60 @@ def test_arrow_batch_naive_timestamp(mssql_config, tmp_path):
     ]
 
 
+def _arrow_batch_sdc_schema(stream: str) -> dict:
+    return {
+        "type": "SCHEMA",
+        "stream": stream,
+        "schema": {"properties": {"id": {"type": "integer"}}},
+        "key_properties": ["id"],
+    }
+
+
+def test_arrow_batch_sdc_metadata(mssql_config, tmp_path):
+    """An Arrow batch gets the target-side `_sdc_` values that a `RECORD` message gets."""
+    stream = f"arrow_sdc_test_{uuid.uuid4().hex[:8]}"
+    schema = _arrow_batch_sdc_schema(stream)
+    arrow_path = _write_arrow_ipc_file(
+        tmp_path,
+        "sdc.arrow",
+        {"id": pa.array([1, 2], type=pa.int64()), "_sdc_sequence": pa.array([7, None], type=pa.int64())},
+    )
+
+    target = TargetMSSQL(config={**mssql_config, "trust_server_certificate": True, "add_record_metadata": True})
+    buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, _arrow_batch_message(stream, arrow_path)]))
+    target.listen(buf)
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=["id"]).connector
+    full_table_name = f"{mssql_config['table_prefix']}{stream}"
+    with connector._engine.connect() as connection:
+        rows = connection.exec_driver_sql(
+            "SELECT id, _sdc_sequence, _sdc_sync_started_at, _sdc_received_at, _sdc_batched_at "  # noqa: S608
+            f"FROM {full_table_name} ORDER BY id"
+        ).fetchall()
+    assert [(r[0], r[2], r[3] is not None, r[4]) for r in rows] == [
+        (1, target.initialized_at, True, None),
+        (2, target.initialized_at, True, None),
+    ]
+    assert rows[0][1] == rows[1][1] >= target.initialized_at
+
+
+def test_arrow_batch_without_sdc_metadata(mssql_config, tmp_path):
+    """An Arrow batch gets no `_sdc_` columns when `add_record_metadata` is off."""
+    stream = f"arrow_no_sdc_test_{uuid.uuid4().hex[:8]}"
+    schema = _arrow_batch_sdc_schema(stream)
+    arrow_path = _write_arrow_ipc_file(tmp_path, "no_sdc.arrow", {"id": pa.array([1], type=pa.int64())})
+
+    target = TargetMSSQL(config={**mssql_config, "trust_server_certificate": True})
+    buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, _arrow_batch_message(stream, arrow_path)]))
+    target.listen(buf)
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=["id"]).connector
+    full_table_name = f"{mssql_config['table_prefix']}{stream}"
+    with connector._engine.connect() as connection:
+        columns = connection.exec_driver_sql(f"SELECT * FROM {full_table_name}").keys()  # noqa: S608
+    assert list(columns) == ["id"]
+
+
 def test_param_limit(mssql_pyodbc_config):
     """pyodbc sends true ODBC bound parameters, so SQL Server's 2100-parameter limit
     applies. With 14 columns the old formula (2100 // 14 = 150) produced exactly 2100
@@ -524,3 +578,44 @@ def test_param_limit(mssql_pyodbc_config):
     target = TargetMSSQL(config=mssql_pyodbc_config)
     buf = io.StringIO("\n".join(json.dumps(m) for m in [schema, *records]))
     target.listen(buf)
+
+
+def _load_and_select(mssql_config, stream, key_properties, records, columns):
+    schema = {
+        "type": "SCHEMA",
+        "stream": stream,
+        "schema": {"properties": {"id": {"type": "string"}, "value": {"type": "integer"}}},
+        "key_properties": key_properties,
+    }
+    messages = [schema, *({"type": "RECORD", "stream": stream, "record": r} for r in records)]
+    target = TargetMSSQL(config=mssql_config)
+    target.listen(io.StringIO("\n".join(json.dumps(m) for m in messages)))
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=key_properties).connector
+    with connector._engine.connect() as connection:
+        return connection.exec_driver_sql(
+            f"SELECT {columns} FROM {mssql_config['table_prefix']}{stream}"  # noqa: S608
+        ).fetchall()
+
+
+def test_keys_that_differ_in_case(mssql_config):
+    """Keys that differ only in case are separate rows, as they are in the source."""
+    stream = f"key_case_test_{uuid.uuid4().hex[:8]}"
+    records = [{"id": "/pricingCalculator", "value": 1}, {"id": "/pricingcalculator", "value": 2}]
+    rows = _load_and_select(mssql_config, stream, ["id"], records, "id, value")
+    assert sorted(tuple(r) for r in rows) == [("/pricingCalculator", 1), ("/pricingcalculator", 2)]
+
+
+def test_existing_case_insensitive_key(mssql_config):
+    """A table created with a case-insensitive key still updates a row whose key differs only in case."""
+    stream = f"existing_key_test_{uuid.uuid4().hex[:8]}"
+    sink = TargetMSSQL(config=mssql_config).create_sink(
+        stream_name=stream, schema={"properties": {}}, key_properties=[]
+    )
+    with sink.connector._engine.connect() as connection, connection.begin():
+        connection.exec_driver_sql(
+            f"CREATE TABLE {mssql_config['table_prefix']}{stream} (id VARCHAR(255) PRIMARY KEY, value BIGINT)"
+        )
+    _load_and_select(mssql_config, stream, ["id"], [{"id": "/pricingCalculator", "value": 1}], "id")
+    rows = _load_and_select(mssql_config, stream, ["id"], [{"id": "/pricingcalculator", "value": 2}], "id, value")
+    assert [tuple(r) for r in rows] == [("/pricingCalculator", 2)]

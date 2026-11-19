@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import datetime
 import re
 import sys
 import tempfile
@@ -13,6 +13,7 @@ from urllib.parse import unquote, urlparse
 
 import mssql_python
 import pyarrow as pa
+import simplejson
 from singer_sdk import metrics
 from singer_sdk.helpers._conformers import replace_leading_digit
 from singer_sdk.sql import SQLSink
@@ -145,7 +146,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         """
         for key, value in record.items():
             if type(value) in [list, dict]:
-                record[key] = json.dumps(value, default=str)
+                record[key] = arrow_bulkcopy.JSON_ENCODER.encode(value)
             elif type(value) is str:
                 record[key] = value.replace("\x00", "")
 
@@ -249,7 +250,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         )
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tmp:
-            json.dump(conformed_records, tmp, default=str)
+            simplejson.dump(conformed_records, tmp, default=str)
             tmp_path = tmp.name
         try:
             manager.upload_file(tmp_path)
@@ -331,6 +332,19 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         """
         schema = self.conform_schema(self.schema)
         join_keys = [self.conform_name(key, "column") for key in self.key_properties]
+
+        if self.include_sdc_metadata_properties:
+            # The SDK sets these on `RECORD` messages only, and replaces any value from the
+            # tap. Without them, an upsert `MERGE` would also set them to null on matched rows.
+            now = datetime.datetime.now(tz=datetime.timezone.utc)
+            for name, value, arrow_type in (
+                ("_sdc_received_at", now, pa.timestamp("us", tz="UTC")),
+                ("_sdc_sequence", round(now.timestamp() * 1000), pa.int64()),
+                ("_sdc_sync_started_at", self.sync_started_at, pa.int64()),
+            ):
+                if name in table.column_names:
+                    table = table.drop_columns([name])
+                table = table.append_column(name, pa.repeat(pa.scalar(value, arrow_type), table.num_rows))
 
         table = arrow_bulkcopy.conform_arrow_table(table, schema, self.conform_name, self.connector)
         if table.num_rows == 0:
@@ -507,7 +521,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
     ) -> str:
         """Build a `MERGE INTO ... USING <table>` statement merging one table into another.
 
-        Pure SQL-text construction (no connection needed) so it can be executed either via
+        Returns SQL text so it can be executed either via
         a SQLAlchemy `Connection` (`merge_upsert_from_table`) or a raw `mssql-python` cursor
         (the native Arrow upsert path in `_process_arrow_batch_native`).
 
@@ -523,7 +537,10 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         # issue here https://github.com/MeltanoLabs/target-postgres/issues/22
         quoted_keys = {key: self.connector._dialect.identifier_preparer.quote(key) for key in schema["properties"]}
 
-        join_condition = " and ".join([f"temp.{quoted_keys[key]} = target.{quoted_keys[key]}" for key in join_keys])
+        collate = self.connector.key_collate_clauses(to_table_name, join_keys)
+        join_condition = " and ".join(
+            [f"temp.{quoted_keys[key]}{collate[key]} = target.{quoted_keys[key]}" for key in join_keys]
+        )
 
         update_stmt = ", ".join(
             [
