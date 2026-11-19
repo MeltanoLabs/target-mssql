@@ -334,16 +334,17 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         join_keys = [self.conform_name(key, "column") for key in self.key_properties]
 
         if self.include_sdc_metadata_properties:
-            # The SDK adds metadata to `RECORD` messages only. Without these columns, an
-            # upsert `MERGE` would also set them to null on every matched row.
+            # The SDK sets these on `RECORD` messages only, and replaces any value from the
+            # tap. Without them, an upsert `MERGE` would also set them to null on matched rows.
             now = datetime.datetime.now(tz=datetime.timezone.utc)
             for name, value, arrow_type in (
                 ("_sdc_received_at", now, pa.timestamp("us", tz="UTC")),
                 ("_sdc_sequence", round(now.timestamp() * 1000), pa.int64()),
                 ("_sdc_sync_started_at", self.sync_started_at, pa.int64()),
             ):
-                if name not in table.column_names:
-                    table = table.append_column(name, pa.repeat(pa.scalar(value, arrow_type), table.num_rows))
+                if name in table.column_names:
+                    table = table.drop_columns([name])
+                table = table.append_column(name, pa.repeat(pa.scalar(value, arrow_type), table.num_rows))
 
         table = arrow_bulkcopy.conform_arrow_table(table, schema, self.conform_name, self.connector)
         if table.num_rows == 0:

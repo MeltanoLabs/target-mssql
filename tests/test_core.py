@@ -508,7 +508,7 @@ def test_arrow_batch_sdc_metadata(mssql_config, tmp_path):
     arrow_path = _write_arrow_ipc_file(
         tmp_path,
         "sdc.arrow",
-        {"id": pa.array([1, 2], type=pa.int64()), "_sdc_sequence": pa.array([7, 8], type=pa.int64())},
+        {"id": pa.array([1, 2], type=pa.int64()), "_sdc_sequence": pa.array([7, None], type=pa.int64())},
     )
 
     target = TargetMSSQL(config={**mssql_config, "trust_server_certificate": True, "add_record_metadata": True})
@@ -522,10 +522,11 @@ def test_arrow_batch_sdc_metadata(mssql_config, tmp_path):
             "SELECT id, _sdc_sequence, _sdc_sync_started_at, _sdc_received_at, _sdc_batched_at "  # noqa: S608
             f"FROM {full_table_name} ORDER BY id"
         ).fetchall()
-    assert [(r[0], r[1], r[2], r[3] is not None, r[4]) for r in rows] == [
-        (1, 7, target.initialized_at, True, None),
-        (2, 8, target.initialized_at, True, None),
+    assert [(r[0], r[2], r[3] is not None, r[4]) for r in rows] == [
+        (1, target.initialized_at, True, None),
+        (2, target.initialized_at, True, None),
     ]
+    assert rows[0][1] == rows[1][1] >= target.initialized_at
 
 
 def test_arrow_batch_without_sdc_metadata(mssql_config, tmp_path):
