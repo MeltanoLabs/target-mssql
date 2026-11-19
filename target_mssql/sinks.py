@@ -507,7 +507,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
     ) -> str:
         """Build a `MERGE INTO ... USING <table>` statement merging one table into another.
 
-        Pure SQL-text construction (no connection needed) so it can be executed either via
+        Returns SQL text so it can be executed either via
         a SQLAlchemy `Connection` (`merge_upsert_from_table`) or a raw `mssql-python` cursor
         (the native Arrow upsert path in `_process_arrow_batch_native`).
 
@@ -523,7 +523,10 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         # issue here https://github.com/MeltanoLabs/target-postgres/issues/22
         quoted_keys = {key: self.connector._dialect.identifier_preparer.quote(key) for key in schema["properties"]}
 
-        join_condition = " and ".join([f"temp.{quoted_keys[key]} = target.{quoted_keys[key]}" for key in join_keys])
+        collate = self.connector.key_collate_clauses(to_table_name, join_keys)
+        join_condition = " and ".join(
+            [f"temp.{quoted_keys[key]}{collate[key]} = target.{quoted_keys[key]}" for key in join_keys]
+        )
 
         update_stmt = ", ".join(
             [
