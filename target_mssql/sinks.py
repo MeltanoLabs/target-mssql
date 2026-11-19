@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime
-import json
 import re
 import sys
 import tempfile
@@ -14,6 +13,7 @@ from urllib.parse import unquote, urlparse
 
 import mssql_python
 import pyarrow as pa
+import simplejson
 from singer_sdk import metrics
 from singer_sdk.helpers._conformers import replace_leading_digit
 from singer_sdk.sql import SQLSink
@@ -146,7 +146,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         """
         for key, value in record.items():
             if type(value) in [list, dict]:
-                record[key] = json.dumps(value, default=str)
+                record[key] = arrow_bulkcopy.JSON_ENCODER.encode(value)
             elif type(value) is str:
                 record[key] = value.replace("\x00", "")
 
@@ -250,7 +250,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         )
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tmp:
-            json.dump(conformed_records, tmp, default=str)
+            simplejson.dump(conformed_records, tmp, default=str)
             tmp_path = tmp.name
         try:
             manager.upload_file(tmp_path)
