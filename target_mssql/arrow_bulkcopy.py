@@ -103,6 +103,8 @@ def _conform_column(
     if connector._jsonschema_type_check(property_jsonschema, ("object",)) or connector._jsonschema_type_check(
         property_jsonschema, ("array",)
     ):
+        if isinstance(column.type, pa.BaseExtensionType) and column.type.extension_name == "arrow.json":
+            return column.cast(pa.string())
         values = column.to_pylist()
         if wrap := _raw_json_wrapper(column.type):
             values = [wrap(v) for v in values]
