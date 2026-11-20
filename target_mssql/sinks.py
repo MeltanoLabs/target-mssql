@@ -237,7 +237,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         schema = self.conform_schema(self.schema)
 
         if join_keys:
-            conformed_records = list({frozenset(r[k] for k in join_keys): r for r in conformed_records}.values())
+            conformed_records = list({tuple(r[k] for k in join_keys): r for r in conformed_records}.values())
 
         if not conformed_records:
             return
@@ -398,7 +398,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
         with self.connector._engine.connect() as connection:
             if self.key_properties:
                 deduped_records = list(
-                    {frozenset(record[k] for k in self.key_properties): record for record in conformed_records}.values()
+                    {tuple(record[k] for k in self.key_properties): record for record in conformed_records}.values()
                 )
 
                 self.logger.info(f"Preparing table {self.full_table_name}")

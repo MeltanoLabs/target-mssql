@@ -619,3 +619,25 @@ def test_existing_case_insensitive_key(mssql_config):
     _load_and_select(mssql_config, stream, ["id"], [{"id": "/pricingCalculator", "value": 1}], "id")
     rows = _load_and_select(mssql_config, stream, ["id"], [{"id": "/pricingcalculator", "value": 2}], "id, value")
     assert [tuple(r) for r in rows] == [("/pricingCalculator", 2)]
+
+
+def test_keys_with_the_same_values_in_a_different_order(mssql_config):
+    """Two records whose key values are the same values in a different order are separate rows."""
+    stream = f"key_order_test_{uuid.uuid4().hex[:8]}"
+    schema = {
+        "type": "SCHEMA",
+        "stream": stream,
+        "schema": {"properties": {"a": {"type": "integer"}, "b": {"type": "integer"}, "value": {"type": "string"}}},
+        "key_properties": ["a", "b"],
+    }
+    records = [{"a": 1, "b": 2, "value": "x"}, {"a": 2, "b": 1, "value": "y"}]
+    messages = [schema, *({"type": "RECORD", "stream": stream, "record": r} for r in records)]
+    target = TargetMSSQL(config=mssql_config)
+    target.listen(io.StringIO("\n".join(json.dumps(m) for m in messages)))
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=["a", "b"]).connector
+    with connector._engine.connect() as connection:
+        rows = connection.exec_driver_sql(
+            f"SELECT a, b, value FROM {mssql_config['table_prefix']}{stream}"  # noqa: S608
+        ).fetchall()
+    assert sorted(tuple(r) for r in rows) == [(1, 2, "x"), (2, 1, "y")]
