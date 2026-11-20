@@ -619,3 +619,37 @@ def test_existing_case_insensitive_key(mssql_config):
     _load_and_select(mssql_config, stream, ["id"], [{"id": "/pricingCalculator", "value": 1}], "id")
     rows = _load_and_select(mssql_config, stream, ["id"], [{"id": "/pricingcalculator", "value": 2}], "id, value")
     assert [tuple(r) for r in rows] == [("/pricingCalculator", 2)]
+
+
+def test_key_longer_than_primary_key_limit(mssql_config):
+    """A text key longer than the 900 bytes of a primary key loads, and later loads still update it."""
+    stream = f"long_key_test_{uuid.uuid4().hex[:8]}"
+    long_id = "q" * 1000
+    _load_and_select(mssql_config, stream, ["id"], [{"id": "short", "value": 1}], "id")
+    _load_and_select(mssql_config, stream, ["id"], [{"id": long_id, "value": 2}, {"id": "short", "value": 3}], "id")
+    rows = _load_and_select(mssql_config, stream, ["id"], [{"id": long_id, "value": 4}], "id, value")
+    assert sorted(tuple(r) for r in rows) == [(long_id, 4), ("short", 3)]
+
+
+def test_arrow_batch_key_longer_than_primary_key_limit(mssql_config, tmp_path):
+    """An Arrow `BATCH` with a text key longer than the 900 bytes of a primary key loads."""
+    stream = f"arrow_long_key_test_{uuid.uuid4().hex[:8]}"
+    long_id = "q" * 1000
+    schema = {
+        "type": "SCHEMA",
+        "stream": stream,
+        "schema": {"properties": {"id": {"type": "string"}, "value": {"type": "integer"}}},
+        "key_properties": ["id"],
+    }
+    arrow_config = {**mssql_config, "trust_server_certificate": True}
+    for name, ids, values in (("long_1.arrow", [long_id, "short"], [1, 2]), ("long_2.arrow", [long_id], [3])):
+        batch = _write_arrow_ipc_file(tmp_path, name, {"id": pa.array(ids), "value": pa.array(values, type=pa.int64())})
+        target = TargetMSSQL(config=arrow_config)
+        target.listen(io.StringIO("\n".join(json.dumps(m) for m in [schema, _arrow_batch_message(stream, batch)])))
+
+    connector = target.create_sink(stream_name=stream, schema=schema["schema"], key_properties=["id"]).connector
+    with connector._engine.connect() as connection:
+        rows = connection.exec_driver_sql(
+            f"SELECT id, value FROM {mssql_config['table_prefix']}{stream}"  # noqa: S608
+        ).fetchall()
+    assert sorted(tuple(r) for r in rows) == [(long_id, 3), ("short", 2)]

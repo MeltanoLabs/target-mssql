@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import functools
 import re
 import sys
 import tempfile
@@ -13,7 +14,9 @@ from urllib.parse import unquote, urlparse
 
 import mssql_python
 import pyarrow as pa
+import pyarrow.compute as pc
 import simplejson
+import sqlalchemy
 from singer_sdk import metrics
 from singer_sdk.helpers._conformers import replace_leading_digit
 from singer_sdk.sql import SQLSink
@@ -217,6 +220,27 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
             )
         return columns
 
+    def _fit_primary_key(self, schema: dict, join_keys: list[str], data: list[dict] | pa.Table) -> None:
+        """Drop the primary key of the table if the text keys of a row in `data` are too long for it."""
+        text_keys = [
+            key
+            for key in join_keys
+            if isinstance(self.connector.to_sql_type(schema["properties"][key]), sqlalchemy.types.VARCHAR)
+        ]
+        if not text_keys:
+            return
+
+        # A UTF-8 value is at least as long as the same value in the code page of a `VARCHAR`
+        # column, so the check can drop a key that would fit, but never keep one that does not.
+        if isinstance(data, pa.Table):
+            lengths = [pc.fill_null(pc.binary_length(data[key]), 0) for key in text_keys]
+            text_key_bytes = pc.max(functools.reduce(pc.add, lengths)).as_py()
+        else:
+            text_key_bytes = max(
+                sum(len(str(record[key]).encode()) for key in text_keys if record[key] is not None) for record in data
+            )
+        self.connector.drop_primary_key_if_too_long(self.full_table_name, text_key_bytes)
+
     @property
     def staging_full_table_name(self) -> str:
         """Permanent staging table for the upsert path (same schema, prefixed _staging_)."""
@@ -248,6 +272,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
             primary_keys=join_keys,
             as_temp_table=False,
         )
+        self._fit_primary_key(schema, join_keys, conformed_records)
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tmp:
             simplejson.dump(conformed_records, tmp, default=str)
@@ -356,6 +381,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
             primary_keys=join_keys,
             as_temp_table=False,
         )
+        self._fit_primary_key(schema, join_keys, table)
 
         with self._open_native_connection() as conn, conn.cursor() as cursor:
             if join_keys:
@@ -408,6 +434,7 @@ class MSSQLSink(SQLSink[MSSQLConnector]):
                     primary_keys=join_keys,
                     as_temp_table=False,
                 )
+                self._fit_primary_key(schema, join_keys, deduped_records)
 
                 staging = self.staging_full_table_name
                 if not self._staging_prepared:

@@ -124,6 +124,46 @@ class MSSQLConnector(SQLConnector):
         _ = sqlalchemy.Table(table_name, meta, *columns, schema=schema_name)
         meta.create_all(self._engine)
 
+    def drop_primary_key_if_too_long(self, full_table_name: str | FullyQualifiedName, text_key_bytes: int) -> None:
+        """Drop the primary key of a table when a row with this many bytes of text keys cannot fit in it.
+
+        SQL Server limits a primary key to 900 bytes, and a text value has no limit. The upsert
+        matches rows on the key properties, not on the constraint, so the table loses only its
+        index. The text key columns become `MAX`, with the same collation.
+
+        Args:
+            full_table_name: the target table name.
+            text_key_bytes: the largest total size of the text key values in one row.
+        """
+        with self._connect() as conn, conn.begin():
+            key_columns = conn.execute(
+                sqlalchemy.text(
+                    """
+                    SELECT k.name, c.name, t.name, c.max_length, c.collation_name
+                    FROM sys.key_constraints AS k
+                    JOIN sys.index_columns AS ic
+                        ON ic.object_id = k.parent_object_id AND ic.index_id = k.unique_index_id
+                    JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                    JOIN sys.types AS t ON t.user_type_id = c.user_type_id
+                    WHERE k.parent_object_id = OBJECT_ID(:table_name) AND k.type = 'PK'
+                    """
+                ),
+                {"table_name": str(full_table_name)},
+            ).fetchall()
+
+            fixed_bytes = sum(max_length for _, _, _, max_length, collation in key_columns if collation is None)
+            if not key_columns or text_key_bytes + fixed_bytes <= 900:
+                return
+
+            quote = self._dialect.identifier_preparer.quote
+            conn.exec_driver_sql(f"ALTER TABLE {full_table_name} DROP CONSTRAINT {quote(key_columns[0][0])}")
+            for _, column, type_name, _, collation in key_columns:
+                if collation is not None:
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE {full_table_name} ALTER COLUMN {quote(column)} {type_name}(MAX) "
+                        f"COLLATE {collation} NOT NULL"
+                    )
+
     def merge_sql_types(self, sql_types):
         current_type, target_type = sql_types
 
