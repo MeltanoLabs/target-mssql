@@ -37,7 +37,7 @@ dev = [
     "mypy>=2.4.1",
     "pyarrow-stubs>=20.0.0.20260819",
 ]
-lint = ["ruff>=0.17.4"]
+lint = ["ruff>=0.17.5"]
 test = [
     "meltano-tap-countries @ git+https://github.com/meltano/sdk.git@main#subdirectory=packages/meltano-tap-countries",
     "meltano-tap-fundamentals @ git+https://github.com/meltano/sdk.git@main#subdirectory=packages/meltano-tap-fundamentals",
